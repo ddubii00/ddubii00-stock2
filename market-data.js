@@ -1,3 +1,6 @@
+const YahooFinance = require('yahoo-finance2').default;
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
+
 const NAVER_MARKET_SUM_URL = "https://finance.naver.com/sise/sise_market_sum.naver";
 const WIKI_NASDAQ_100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100";
 const WIKI_DOW_URL = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average";
@@ -636,38 +639,90 @@ async function mapWithLimit(items, limit, mapper) {
   return results;
 }
 
-async function enrichUsMarket(contributors, marketId) {
-  const quotes = await mapWithLimit(contributors, US_QUOTE_CONCURRENCY, async (item) => {
-    try {
-      return await fetchStooqQuote(item.code);
-    } catch (error) {
-      return {
-        price: null,
-        priceText: "",
-        change: null,
-        changeText: "",
-        changeDirection: "보합",
-        changeRate: null,
-        changeRateText: "",
-        volume: null,
-        volumeText: "",
-        per: item.per ?? null,
-        roe: item.roe ?? null,
-        sales: item.sales ?? null,
-        operatingProfit: item.operatingProfit ?? null,
-        pbr: item.pbr ?? null,
-        currency: "USD",
-        detailUrl: `https://stooq.com/q/?s=${encodeURIComponent(stooqSymbol(item.code))}`,
-        quoteError: error.message,
-      };
-    }
-  });
+const fundamentalCache = new Map();
+const FUNDAMENTAL_CACHE_TTL = 1000 * 60 * 60 * 24; // 24 hours
 
-  return contributors.map((item, index) => ({
-    ...item,
-    market: marketId,
-    ...quotes[index],
-  }));
+async function enrichUsMarket(contributors, marketId) {
+  const codes = contributors.map(item => item.code);
+  const quotes = await yahooFinance.quote(codes);
+  const quoteMap = Object.fromEntries(quotes.map(q => [q.symbol, q]));
+
+  // Fetch fundamentals in chunks of 20 with 200ms delay to improve loading speed
+  const chunkSize = 20;
+  for (let i = 0; i < codes.length; i += chunkSize) {
+    const chunk = codes.slice(i, i + chunkSize);
+    const uncached = chunk.filter(code => {
+      const cached = fundamentalCache.get(code);
+      return !cached || Date.now() - cached.timestamp > FUNDAMENTAL_CACHE_TTL;
+    });
+
+    if (uncached.length > 0) {
+      await Promise.all(uncached.map(async (code) => {
+        try {
+          const qs = await yahooFinance.quoteSummary(code, { modules: ['financialData', 'defaultKeyStatistics'] });
+          fundamentalCache.set(code, {
+            timestamp: Date.now(),
+            data: qs
+          });
+        } catch (error) {
+          console.error(`Failed to fetch fundamental for ${code}:`, error.message);
+        }
+      }));
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+  }
+
+  return contributors.map((item) => {
+    const quote = quoteMap[item.code] || {};
+    const price = quote.regularMarketPrice || null;
+    const change = quote.regularMarketChange || null;
+    const changeRate = quote.regularMarketChangePercent || null;
+    const volume = quote.regularMarketVolume || null;
+    
+    let sales = null;
+    let operatingProfit = null;
+    let per = quote.trailingPE || quote.forwardPE || null;
+    let roe = null;
+    let pbr = quote.priceToBook || null;
+
+    const cachedFund = fundamentalCache.get(item.code);
+    if (cachedFund && cachedFund.data) {
+      const fd = cachedFund.data.financialData;
+      const ks = cachedFund.data.defaultKeyStatistics;
+      if (fd) {
+        sales = fd.totalRevenue || null;
+        if (fd.totalRevenue && fd.operatingMargins) {
+          operatingProfit = fd.totalRevenue * fd.operatingMargins;
+        }
+        roe = fd.returnOnEquity ? fd.returnOnEquity * 100 : null; // roe in percentage
+      }
+      if (ks) {
+        if (!per) per = ks.trailingPE || ks.forwardPE || null;
+        if (!pbr) pbr = ks.priceToBook || null;
+      }
+    }
+
+    return {
+      ...item,
+      market: marketId,
+      price,
+      priceText: Number.isFinite(price) ? formatUsd(price) : "",
+      change,
+      changeText: Number.isFinite(change) ? signedText(change, formatUsd) : "",
+      changeDirection: change > 0 ? "상승" : change < 0 ? "하락" : "보합",
+      changeRate,
+      changeRateText: Number.isFinite(changeRate) ? signedText(changeRate, (v) => `${formatUsd(v)}%`) : "",
+      volume,
+      volumeText: Number.isFinite(volume) ? volume.toLocaleString("en-US") : "",
+      per,
+      roe,
+      sales,
+      operatingProfit,
+      pbr,
+      currency: "USD",
+      detailUrl: `https://finance.yahoo.com/quote/${item.code}`
+    };
+  });
 }
 
 async function getUsMarket(marketId, forceRefresh = false) {

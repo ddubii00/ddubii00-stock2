@@ -4,11 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Market Top Boards</title>
-    <link rel="stylesheet" href="/styles.css?v=20260525e" />
-    <link rel="stylesheet" href="/relative-enhancements.css?v=20260528a" />
+    <link rel="stylesheet" href="/styles.css?v=20260529_3" />
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="/app.js?v=20260525u" defer></script>
-    <script src="/relative-enhancements.js?v=20260528a" defer></script>
+    <script src="/app.js?v=20260529_3" defer></script>
   </head>
   <body>
     <header class="app-header">
@@ -62,7 +60,7 @@
           <strong class="down" id="downCount">0</strong>
         </article>
         <article>
-          <span>지수 변화율</span>
+          <span>지수 등락률</span>
           <strong id="avgRate">0.00%</strong>
         </article>
         <article>
@@ -115,8 +113,8 @@
               <th class="numeric">영업이익(조)</th>
               <th class="numeric">PER</th>
               <th class="numeric">ROE</th>
-              <th class="numeric">PBR</th>
-              <th class="numeric">거래량</th>
+              <th class="numeric" id="pbrHeader">PBR</th>
+              <th class="numeric" id="volumeHeader">거래량</th>
             </tr>
           </thead>
           <tbody id="stockRows"></tbody>

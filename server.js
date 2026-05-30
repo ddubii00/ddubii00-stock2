@@ -2,6 +2,8 @@ const http = require("node:http");
 const { readFile } = require("node:fs/promises");
 const path = require("node:path");
 const { getMarketPayload, getMarkets } = require("./market-data");
+const YahooFinance = require('yahoo-finance2').default;
+const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey', 'ripHistorical'] });
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 5173);
@@ -155,57 +157,44 @@ async function fetchUsOhlcv(code, days) {
   const cacheKey = `${symbol}:${days}`;
   const now = Date.now();
   const cached = usOhlcvCache.get(cacheKey);
-  if (cached && now - cached.loadedAt < 1000 * 60 * 5) {
+  if (cached && now - cached.loadedAt < 1000 * 60 * 60 * 12) { // 12 hours caching
     return cached.rows;
   }
 
-  const endpoints = [
-    `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=2y&interval=1d`,
-    `https://query2.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=2y&interval=1d`,
-  ];
+  const period1 = new Date(Date.now() - 1000 * 60 * 60 * 24 * Math.max(days + 40, 800)).toISOString().slice(0, 10);
+  const period2 = new Date().toISOString().slice(0, 10);
   let lastError = null;
-  for (const endpoint of endpoints) {
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const response = await fetch(endpoint, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-          "Accept-Language": "en-US,en;q=0.9",
-        },
-      });
-      if (response.status === 429) {
-        await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
-        lastError = new Error(`Yahoo chart responded with 429`);
-        continue;
-      }
-      if (!response.ok) {
-        lastError = new Error(`Yahoo chart responded with ${response.status}`);
-        break;
-      }
-      const payload = await response.json();
-      const result = payload.chart?.result?.[0];
-      const quote = result?.indicators?.quote?.[0];
-      const stamps = result?.timestamp || [];
-      const rows = stamps
-        .map((stamp, i) => ({
-          date: new Date(stamp * 1000).toISOString().slice(0, 10).replace(/-/g, ""),
-          open: quote?.open?.[i] ?? null,
-          high: quote?.high?.[i] ?? null,
-          low: quote?.low?.[i] ?? null,
-          close: quote?.close?.[i] ?? null,
-          volume: quote?.volume?.[i] ?? null,
-        }))
-        .filter(
-          (x) =>
-            Number.isFinite(x.open) &&
-            Number.isFinite(x.high) &&
-            Number.isFinite(x.low) &&
-            Number.isFinite(x.close),
-        );
-      const sliced = rows.slice(-days);
-      usOhlcvCache.set(cacheKey, { loadedAt: now, rows: sliced });
-      return sliced;
-    }
+
+  try {
+    const historicals = await yahooFinance.chart(symbol, {
+      period1,
+      interval: '1d'
+    });
+
+    const rows = historicals.quotes.map((quote) => {
+      // yahooFinance.historical returns date as Date objects
+      const d = new Date(quote.date);
+      const ds = d.toISOString().slice(0, 10).replace(/-/g, "");
+      return {
+        date: ds,
+        open: quote.open ?? null,
+        high: quote.high ?? null,
+        low: quote.low ?? null,
+        close: quote.close ?? null,
+        volume: quote.volume ?? null,
+      };
+    }).filter(
+      (x) =>
+        Number.isFinite(x.open) &&
+        Number.isFinite(x.high) &&
+        Number.isFinite(x.low) &&
+        Number.isFinite(x.close)
+    );
+    const sliced = rows.slice(-days);
+    usOhlcvCache.set(cacheKey, { loadedAt: now, rows: sliced });
+    return sliced;
+  } catch (error) {
+    lastError = error;
   }
 
   // Fallback #1: Nasdaq chart API
