@@ -685,18 +685,18 @@ function drawMacdBackground(container, chart, items) {
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       if (!Number.isFinite(item.macd)) continue;
-      const startX = Math.round(chart.timeScale().timeToCoordinate(item.time));
-      if (startX === null || isNaN(startX)) continue;
-      let endX;
+      const x1 = chart.timeScale().timeToCoordinate(item.time);
+      if (x1 === null) continue;
+      let x2;
       if (i + 1 < items.length) {
-        endX = Math.round(chart.timeScale().timeToCoordinate(items[i + 1].time));
-        if (endX === null || isNaN(endX)) endX = startX + 8;
+        x2 = chart.timeScale().timeToCoordinate(items[i + 1].time);
+        if (x2 === null) x2 = x1 + 8;
       } else {
-        endX = startX + 8;
+        x2 = x1 + 8;
       }
       const color = item.macd >= 0 ? "rgba(239,68,68,0.07)" : "rgba(37,99,235,0.07)";
       ctx.fillStyle = color;
-      ctx.fillRect(startX, 0, endX - startX, rect.height);
+      ctx.fillRect(x1, 0, x2 - x1 + 0.5, rect.height);
     }
   };
 
@@ -706,7 +706,7 @@ function drawMacdBackground(container, chart, items) {
   });
 }
 
-function drawIchimokuCloud(container, chart, senkouASeries, senkouBSeries, senkouAData, senkouBData, visible = true) {
+function drawIchimokuCloud(container, chart, senkouASeries, senkouBSeries, ichiSource, ichi, visible = true) {
   const existing = container.querySelector(".ichi-cloud-overlay");
   if (existing) existing.remove();
   if (!visible) return { setVisible: () => {} };
@@ -731,11 +731,11 @@ function drawIchimokuCloud(container, chart, senkouASeries, senkouBSeries, senko
       let started = false;
       const tops = [];
       const bottoms = [];
-      for (let i = 0; i < senkouAData.length; i += 1) {
-        const a = senkouAData[i]?.value;
-        const b = senkouBData[i]?.value;
+      for (let i = 0; i < ichiSource.length; i += 1) {
+        const a = ichi[i]?.senkouA;
+        const b = ichi[i]?.senkouB;
         if (!Number.isFinite(a) || !Number.isFinite(b) || !cond(a, b)) continue;
-        const x = chart.timeScale().timeToCoordinate(senkouAData[i].time);
+        const x = chart.timeScale().timeToCoordinate(ichiSource[i].time);
         const yA = senkouASeries.priceToCoordinate(a);
         const yB = senkouBSeries.priceToCoordinate(b);
         if (x === null || yA === null || yB === null) continue;
@@ -823,15 +823,15 @@ function addFuturePeriods(lastTime, periods, timeframe) {
 function renderCharts(payload, ichimokuPayload) {
   destroyCharts();
   const common = {
-    layout: { background: { type: "solid", color: "transparent" }, textColor: "#334155", attributionLogo: false },
+    layout: { background: { color: "#fff" }, textColor: "#334155", attributionLogo: false },
     grid: { vertLines: { color: "#edf2f7" }, horzLines: { color: "#edf2f7" } },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     handleScale: false,
     handleScroll: { pressedMouseMove: true, horzTouchDrag: true, vertTouchDrag: false, mouseWheel: false },
-    rightPriceScale: { borderColor: "#cbd5e1", minimumWidth: 100 },
+    rightPriceScale: { borderColor: "#d0d7de", minimumWidth: 120 },
     timeScale: {
-      borderColor: "#cbd5e1",
-      timeVisible: false,
+      borderColor: "#d0d7de",
+      timeVisible: true,
       tickMarkFormatter: (time) => {
         if (typeof time === "number") {
           const d = new Date(time * 1000);
@@ -846,27 +846,12 @@ function renderCharts(payload, ichimokuPayload) {
         return "";
       },
     },
-    localization: {
-      timeFormatter: (time) => {
-        if (typeof time === "string") {
-          return time.replace(/-/g, ".") + ".";
-        }
-        if (typeof time === "number") {
-          const d = new Date(time * 1000);
-          return `${d.getUTCFullYear()}.${String(d.getUTCMonth() + 1).padStart(2, "0")}.${String(d.getUTCDate()).padStart(2, "0")}.`;
-        }
-        if (time && typeof time === "object" && "year" in time) {
-          return `${time.year}.${String(time.month).padStart(2, "0")}.${String(time.day).padStart(2, "0")}.`;
-        }
-        return String(time);
-      }
-    }
   };
   const priceChart = LightweightCharts.createChart(els.priceChart, { ...common, height: 420 });
   const volumeChart = LightweightCharts.createChart(els.volumeChart, { ...common, height: 180 });
   const macdChart = LightweightCharts.createChart(els.macdChart, { ...common, height: 220 });
   chartRuntime = { priceChart, volumeChart, macdChart };
-  const ichimokuChart = LightweightCharts.createChart(els.ichimokuChart, { ...common, height: 360 });
+  const ichimokuChart = LightweightCharts.createChart(els.ichimokuChart, { ...common, height: 240 });
   chartRuntime = { priceChart, volumeChart, macdChart, ichimokuChart };
 
   const candles = priceChart.addCandlestickSeries({
@@ -903,67 +888,14 @@ function renderCharts(payload, ichimokuPayload) {
       const pa = p[rule.a], pb = p[rule.b], ca = c[rule.a], cb = c[rule.b];
       if (pa === null || pb === null || ca === null || cb === null) continue;
       if (pa <= pb && ca > cb) {
-        priceMarkers.push({ time: c.time, position: "belowBar", color: "#ef4444", shape: "circle", text: rule.label });
+        priceMarkers.push({ time: c.time, position: "belowBar", color: "#2563eb", shape: "circle", text: rule.label });
       } else if (pa >= pb && ca < cb) {
-        priceMarkers.push({ time: c.time, position: "aboveBar", color: "#2563eb", shape: "circle", text: rule.label });
+        priceMarkers.push({ time: c.time, position: "aboveBar", color: "#ef4444", shape: "circle", text: rule.label });
       }
     }
   }
   candles.setMarkers(priceMarkers);
-  els.priceChart.style.position = 'relative';
-  els.priceChart.style.backgroundColor = '#fff';
   drawMacdBackground(els.priceChart, priceChart, payload.items);
-
-  const tooltip = document.createElement('div');
-  tooltip.style = 'position: absolute; display: none; z-index: 1000; background: rgba(255, 255, 255, 0.95); padding: 12px; border: 1px solid #e2e8f0; font-size: 13px; font-weight: bold; pointer-events: none; border-radius: 6px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); color: #334155;';
-  els.priceChart.appendChild(tooltip);
-
-  priceChart.subscribeCrosshairMove((param) => {
-    if (
-      param.point === undefined ||
-      !param.time ||
-      param.point.x < 0 ||
-      param.point.x > els.priceChart.clientWidth ||
-      param.point.y < 0 ||
-      param.point.y > els.priceChart.clientHeight
-    ) {
-      tooltip.style.display = 'none';
-    } else {
-      const data = param.seriesData.get(candles);
-      const d5 = param.seriesData.get(ma5Series);
-      const d20 = param.seriesData.get(ma20Series);
-      const d60 = param.seriesData.get(ma60Series);
-      const d120 = param.seriesData.get(ma120Series);
-      if (data) {
-        tooltip.style.display = 'block';
-        const color = data.open > data.close ? '#2563eb' : '#ef4444';
-        tooltip.innerHTML = `
-          <div style="margin-bottom: 8px; font-size: 14px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px;">
-            시가: <span style="color: ${color}">${data.open.toLocaleString()}</span> &nbsp;
-            종가: <span style="color: ${color}">${data.close.toLocaleString()}</span>
-          </div>
-          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px; font-size: 12px;">
-            <div>5일: ${d5?.value?.toFixed(2) || '-'}</div>
-            <div>20일: ${d20?.value?.toFixed(2) || '-'}</div>
-            <div>60일: ${d60?.value?.toFixed(2) || '-'}</div>
-            <div>120일: ${d120?.value?.toFixed(2) || '-'}</div>
-          </div>
-        `;
-        let left = param.point.x + 15;
-        let top = param.point.y + 15;
-        if (left > els.priceChart.clientWidth - 160) {
-          left = param.point.x - 160;
-        }
-        if (top > els.priceChart.clientHeight - 80) {
-          top = param.point.y - 80;
-        }
-        tooltip.style.left = left + 'px';
-        tooltip.style.top = top + 'px';
-      } else {
-        tooltip.style.display = 'none';
-      }
-    }
-  });
 
   const vol = volumeChart.addHistogramSeries({
     priceFormat: { type: "volume" },
@@ -1066,42 +998,10 @@ function renderCharts(payload, ichimokuPayload) {
     ichimokuChart,
     senkouASeries,
     senkouBSeries,
-    senkouAData,
-    senkouBData,
+    ichiSource,
+    ichi,
     true,
   );
-
-  const ichiVerticalLine = document.createElement('div');
-  ichiVerticalLine.style = 'position: absolute; display: none; width: 0; border-left: 2px dashed #3b82f6; top: 0; bottom: 0; z-index: 10; pointer-events: none;';
-  els.ichimokuChart.appendChild(ichiVerticalLine);
-
-  ichimokuChart.subscribeCrosshairMove((param) => {
-    if (
-      param.point === undefined ||
-      !param.time ||
-      param.point.x < 0 ||
-      param.point.x > els.ichimokuChart.clientWidth ||
-      param.point.y < 0 ||
-      param.point.y > els.ichimokuChart.clientHeight
-    ) {
-      ichiVerticalLine.style.display = 'none';
-      return;
-    }
-    const currentIndex = ichiSource.findIndex((x) => x.time === param.time);
-    if (currentIndex !== -1) {
-      const futureIndex = currentIndex + 26;
-      if (futureIndex < senkouAData.length) {
-        const futureTime = senkouAData[futureIndex].time;
-        const x = ichimokuChart.timeScale().timeToCoordinate(futureTime);
-        if (x !== null && !isNaN(x)) {
-          ichiVerticalLine.style.display = 'block';
-          ichiVerticalLine.style.left = x + 'px';
-          return;
-        }
-      }
-    }
-    ichiVerticalLine.style.display = 'none';
-  });
 
   const closeByTime = new Map(payload.items.map((x) => [x.time, x.close]));
   const volumeByTime = new Map(payload.items.map((x) => [x.time, x.volume || 0]));
@@ -1432,356 +1332,3 @@ els.marketButtons.forEach((button) => {
 });
 
 loadStocks();
-(() => {
-  const RELATIVE_PERIODS = [
-    { key: "day", label: "당일", offset: 1 },
-    { key: "d3", label: "3일", offset: 3 },
-    { key: "d5", label: "5일", offset: 5 },
-    { key: "d10", label: "10일", offset: 10 },
-    { key: "m1", label: "1개월", offset: 21 },
-    { key: "m3", label: "3개월", offset: 63 },
-    { key: "m6", label: "6개월", offset: 126 },
-    { key: "y1", label: "1년", offset: 252 },
-  ];
-
-  const INDEX_SYMBOLS = {
-    kospi: { code: "KOSPI", label: "KOSPI", chartMarket: "kospi" },
-    kosdaq: { code: "KOSDAQ", label: "KOSDAQ", chartMarket: "kosdaq" },
-    nasdaq100: { code: "^IXIC", label: "나스닥", chartMarket: "nasdaq100" },
-    dow: { code: "^DJI", label: "Dow", chartMarket: "nasdaq100" },
-  };
-
-  const WARNING_THRESHOLD = -5;
-  const CHART_LOOKBACK_DAYS = 320;
-  const RELATIVE_CONCURRENCY = 6;
-  const cache = new Map();
-
-  function withSignClass(value) {
-    if (value > 0) return "up";
-    if (value < 0) return "down";
-    return "flat";
-  }
-
-  function ensureMetricLabel() {
-    const metricArticle = els.avgRate?.closest("article");
-    const label = metricArticle?.querySelector("span");
-    if (label) {
-      const indexLabel = INDEX_SYMBOLS[state.market]?.label || "지수";
-      label.textContent = `${indexLabel} 등락률`;
-    }
-  }
-
-  function ensureRelativeHeaders() {
-    const headerRow = document.querySelector(".table-wrap thead tr");
-    if (!headerRow || headerRow.querySelector("[data-relative-header]")) {
-      return;
-    }
-
-    const fragment = document.createDocumentFragment();
-    RELATIVE_PERIODS.forEach((period) => {
-      const th = document.createElement("th");
-      th.className = "numeric relative-header";
-      th.dataset.relativeHeader = period.key;
-      th.textContent = period.label;
-      fragment.appendChild(th);
-    });
-    headerRow.appendChild(fragment);
-  }
-
-  function returnFromOffset(rows, offset) {
-    if (!Array.isArray(rows) || rows.length <= offset) {
-      return null;
-    }
-    const latest = rows[rows.length - 1]?.close;
-    const base = rows[rows.length - 1 - offset]?.close;
-    if (!Number.isFinite(latest) || !Number.isFinite(base) || base === 0) {
-      return null;
-    }
-    return ((latest - base) / base) * 100;
-  }
-
-  function computePeriodReturns(rows, dayFallback = null) {
-    return Object.fromEntries(
-      RELATIVE_PERIODS.map((period) => {
-        const value = period.key === "day" && Number.isFinite(dayFallback)
-          ? dayFallback
-          : returnFromOffset(rows, period.offset);
-        return [period.key, Number.isFinite(value) ? value : null];
-      }),
-    );
-  }
-
-  async function mapWithLimit(items, limit, mapper) {
-    const results = new Array(items.length);
-    let nextIndex = 0;
-
-    async function worker() {
-      while (nextIndex < items.length) {
-        const index = nextIndex;
-        nextIndex += 1;
-        results[index] = await mapper(items[index], index);
-      }
-    }
-
-    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-    return results;
-  }
-
-  async function fetchOhlcv(code, days = CHART_LOOKBACK_DAYS, marketOverride = state.market) {
-    const params = new URLSearchParams({
-      market: marketOverride,
-      code,
-      days: String(days),
-      timeframe: "day",
-    });
-    const response = await fetch(`/api/ohlcv?${params.toString()}`);
-    const payload = await response.json();
-    if (!response.ok) {
-      throw new Error(payload.detail || payload.error || `${code} 차트 데이터 요청 실패`);
-    }
-    return payload.items || [];
-  }
-
-  function relativePerformance(stockReturns, indexReturns) {
-    return Object.fromEntries(
-      RELATIVE_PERIODS.map((period) => {
-        const stockReturn = stockReturns[period.key];
-        const indexReturn = indexReturns[period.key];
-        const relativeReturn = Number.isFinite(stockReturn) && Number.isFinite(indexReturn)
-          ? stockReturn - indexReturn
-          : null;
-        return [
-          period.key,
-          {
-            stockReturn: Number.isFinite(stockReturn) ? stockReturn : null,
-            indexReturn: Number.isFinite(indexReturn) ? indexReturn : null,
-            relativeReturn,
-            warning: Number.isFinite(relativeReturn) && relativeReturn < WARNING_THRESHOLD,
-          },
-        ];
-      }),
-    );
-  }
-
-  function cacheKeyFor(items) {
-    return [
-      state.market,
-      INDEX_SYMBOLS[state.market]?.code || "",
-      items.map((item) => `${item.code}:${item.changeRate ?? ""}`).join("|"),
-    ].join("::");
-  }
-
-  async function enrichRelativeData(items) {
-    const cacheKey = cacheKeyFor(items);
-    const cached = cache.get(cacheKey);
-    if (cached && Date.now() - cached.loadedAt < 1000 * 60 * 5) {
-      return cached.value;
-    }
-
-    const index = INDEX_SYMBOLS[state.market] || INDEX_SYMBOLS.kospi;
-    let indexRows = [];
-    const indexCandidates = [index, ...(index.fallbacks || [])];
-    for (const candidate of indexCandidates) {
-      try {
-        indexRows = await fetchOhlcv(
-          candidate.code,
-          CHART_LOOKBACK_DAYS,
-          candidate.chartMarket || index.chartMarket || state.market,
-        );
-        if (indexRows.length) break;
-      } catch (error) {
-        console.warn(`Index OHLCV fetch failed for ${candidate.code}`, error);
-      }
-    }
-    const indexReturns = computePeriodReturns(indexRows);
-
-    const enrichedItems = await mapWithLimit(items, RELATIVE_CONCURRENCY, async (stock) => {
-      try {
-        const rows = await fetchOhlcv(stock.code);
-        const stockReturns = computePeriodReturns(rows, stock.changeRate);
-        return {
-          ...stock,
-          relativePerformance: relativePerformance(stockReturns, indexReturns),
-        };
-      } catch (error) {
-        console.warn(`Relative performance fetch failed for ${stock.code}`, error);
-        const stockReturns = computePeriodReturns([], stock.changeRate);
-        return {
-          ...stock,
-          relativePerformance: relativePerformance(stockReturns, indexReturns),
-        };
-      }
-    });
-
-    const value = {
-      indexPerformance: {
-        ...index,
-        periods: indexReturns,
-        warningThreshold: WARNING_THRESHOLD,
-      },
-      items: enrichedItems,
-    };
-    cache.set(cacheKey, { loadedAt: Date.now(), value });
-    return value;
-  }
-
-  function firstIndexReturn(periodKey = "day") {
-    if (state.indexPerformance?.periods) {
-      const value = state.indexPerformance.periods[periodKey];
-      if (Number.isFinite(value)) return value;
-    }
-
-    for (const item of state.items || []) {
-      const value = item.relativePerformance?.[periodKey]?.indexReturn;
-      if (Number.isFinite(value)) return value;
-    }
-    return null;
-  }
-
-  const baseUpdateChrome = updateChrome;
-  updateChrome = function updateChromeWithRelativeHeaders() {
-    baseUpdateChrome();
-    ensureMetricLabel();
-    ensureRelativeHeaders();
-  };
-
-  updateMetrics = function updateMetricsWithIndexRate(visibleItems) {
-    const up = state.items.filter((item) => rateClass(item) === "up").length;
-    const down = state.items.filter((item) => rateClass(item) === "down").length;
-    const indexDayRate = firstIndexReturn("day");
-
-    els.upCount.textContent = numberFormatter.format(up);
-    els.downCount.textContent = numberFormatter.format(down);
-    els.avgRate.textContent = formatRate(indexDayRate);
-    els.avgRate.className = withSignClass(indexDayRate);
-    els.visibleCount.textContent = `${numberFormatter.format(visibleItems.length)}개`;
-
-    if (state.meta.extraType === "marketCap") {
-      const marketCapTotal = state.items.reduce(
-        (sum, item) => sum + (Number.isFinite(item.marketCap) ? item.marketCap : 0),
-        0,
-      );
-      els.totalMarketCap.textContent = marketCapToJo(marketCapTotal);
-    } else if (state.meta.extraType === "marketCapUsd") {
-      const marketCapTotal = state.items.reduce(
-        (sum, item) => sum + (Number.isFinite(item.marketCap) ? item.marketCap : 0),
-        0,
-      );
-      els.totalMarketCap.textContent = formatUsdMarketCap(marketCapTotal);
-    } else {
-      els.totalMarketCap.textContent = averageVolumeText(state.items);
-    }
-  };
-
-  function relativeCell(stock, periodKey) {
-    const data = stock.relativePerformance?.[periodKey];
-    const value = data?.relativeReturn;
-    const valueClass = withSignClass(value);
-    const warning = data?.warning ? `<span class="warning-tag" style="position: absolute; bottom: 2px; right: 8px; font-size: 11px; font-weight: bold; line-height: 1; padding: 2px 4px; background-color: #ef4444; color: #ffffff; border-radius: 4px; opacity: 1;">경고</span>` : "";
-    return `
-      <td class="numeric relative-cell" style="position: relative; vertical-align: middle;">
-        <span class="relative-rate ${valueClass}">${formatRate(value)}</span>
-        ${warning}
-      </td>`;
-  }
-
-  function relativeCells(stock) {
-    return RELATIVE_PERIODS.map((period) => relativeCell(stock, period.key)).join("");
-  }
-
-  renderRows = function renderRowsWithRelativePerformance(items) {
-    els.rows.innerHTML = items
-      .map((stock) => {
-        const movement = rateClass(stock);
-        return `
-          <tr>
-            <td class="rank">${formatNumber(stock.rank)}</td>
-            <td>
-              <div class="stock-name">
-                <a href="#" data-code="${escapeHtml(stock.code)}" data-name="${escapeHtml(stock.name)}" class="stock-link">
-                  ${escapeHtml(stock.name)}
-                </a>
-                <span class="code">${escapeHtml(stock.code)}</span>
-              </div>
-            </td>
-            <td class="numeric">${formatPrice(stock)}</td>
-            <td class="numeric">
-              <span class="rate-pill ${movement}">${formatRate(stock.changeRate, stock.changeRateText)}</span>
-            </td>
-            <td class="numeric ${movement}">${escapeHtml(formatChange(stock))}</td>
-            ${extraCell(stock)}
-            <td class="numeric muted-value">${eokToJo(stock.sales)}</td>
-            <td class="numeric muted-value">${eokToJo(stock.operatingProfit)}</td>
-            <td class="numeric">${formatPlainNumber(stock.per)}</td>
-            <td class="numeric">${Number.isFinite(stock.roe) ? `${formatPlainNumber(stock.roe)}%` : "-"}</td>
-            <td class="numeric muted-value">${formatUnavailableMetric(stock.pbr)}</td>
-            <td class="numeric">${formatNumber(stock.volume)}</td>
-            ${relativeCells(stock)}
-          </tr>`;
-      })
-      .join("");
-  };
-
-  loadStocks = async function loadStocksWithRelativeData(forceRefresh = false) {
-    const serial = ++requestSerial;
-    state.loading = true;
-    state.error = "";
-    state.indexPerformance = null;
-    els.refreshButton.disabled = true;
-    render();
-
-    try {
-      const params = new URLSearchParams({ market: state.market });
-      if (forceRefresh) {
-        params.set("refresh", "1");
-      }
-
-      const response = await fetch(`/api/market?${params.toString()}`);
-      const payload = await response.json();
-      if (!response.ok) {
-        throw new Error(payload.detail || payload.error || "데이터 요청 실패");
-      }
-
-      if (serial !== requestSerial) {
-        return;
-      }
-
-      const relative = await enrichRelativeData(payload.items || []);
-      if (serial !== requestSerial) {
-        return;
-      }
-
-      state.items = relative.items;
-      state.indexPerformance = relative.indexPerformance;
-      state.meta = {
-        currency: payload.currency,
-        extraLabel: payload.extraLabel,
-        extraType: payload.extraType,
-        eyebrow: payload.eyebrow,
-        metricLabel: payload.metricLabel,
-        rankLabel: payload.rankLabel,
-        title: payload.title,
-        timezone: payload.timezone,
-      };
-      state.sourceName = payload.sourceName;
-      state.sourceUrl = payload.sourceUrl;
-      state.retrievedAt = payload.retrievedAt;
-    } catch (error) {
-      if (serial === requestSerial) {
-        state.error = `데이터를 가져오지 못했습니다. ${error.message}`;
-        state.items = [];
-      }
-    } finally {
-      if (serial === requestSerial) {
-        state.loading = false;
-        els.refreshButton.disabled = false;
-        render();
-      }
-    }
-  };
-
-  if (typeof requestSerial === "number") {
-    requestSerial += 1;
-  }
-  loadStocks();
-})();
