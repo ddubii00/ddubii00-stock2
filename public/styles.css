@@ -300,6 +300,69 @@ select:focus,
   padding: 0 14px;
 }
 
+.chart-return-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+  min-width: 680px;
+  margin: 0 0 12px;
+}
+
+.return-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 9px 10px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.return-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 4px;
+  color: #111827;
+}
+
+.return-card span {
+  display: block;
+  white-space: nowrap;
+}
+
+.return-card .up {
+  color: #dc2626;
+  font-weight: 700;
+}
+
+.return-card .down {
+  color: #2563eb;
+  font-weight: 700;
+}
+
+.return-card .flat {
+  color: #64748b;
+  font-weight: 700;
+}
+
+.return-card.is-warning {
+  border-color: rgba(220, 38, 38, 0.45);
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.return-card .warning-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  padding: 0 7px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .period-buttons {
   display: flex;
   gap: 6px;
@@ -408,7 +471,7 @@ select:focus,
 
 table {
   width: 100%;
-  min-width: 1320px;
+  min-width: 1900px;
   border-collapse: collapse;
 }
 
@@ -446,6 +509,62 @@ tbody tr:hover {
   width: 62px;
   color: var(--muted);
   font-weight: 800;
+}
+
+.period-return-cell {
+  min-width: 124px;
+}
+
+.period-return-lines {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  white-space: nowrap;
+  line-height: 1.25;
+}
+
+.period-return-lines span {
+  display: block;
+}
+
+.period-return-lines .up {
+  color: #dc2626;
+  font-weight: 800;
+}
+
+.period-return-lines .down {
+  color: #2563eb;
+  font-weight: 800;
+}
+
+.period-return-lines .flat {
+  color: #64748b;
+  font-weight: 800;
+}
+
+.period-return-lines .return-label {
+  display: inline;
+  color: #64748b;
+  font-size: 0.72em;
+  font-weight: 700;
+}
+
+.period-return-lines.is-warning {
+  border-radius: 8px;
+  background: rgba(220, 38, 38, 0.08);
+  padding: 4px 6px;
+  border: 1px solid rgba(220, 38, 38, 0.45);
+}
+
+.table-warning-badge {
+  align-self: flex-end;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  padding: 1px 8px;
+  font-size: 0.68rem;
+  font-weight: 900;
 }
 
 /* Tighten spacing between 종목(2nd col) and 현재가(3rd col) */

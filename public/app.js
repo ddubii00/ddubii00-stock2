@@ -59,6 +59,7 @@ const els = {
   upCount: document.querySelector("#upCount"),
   visibleCount: document.querySelector("#visibleCount"),
   chartTitle: document.querySelector("#chartTitle"),
+  chartReturnSummary: document.querySelector("#chartReturnSummary"),
   daysInput: document.querySelector("#daysInput"),
   applyDaysButton: document.querySelector("#applyDaysButton"),
   ichimokuDaysInput: document.querySelector("#ichimokuDaysInput"),
@@ -81,6 +82,15 @@ const rateFormatter = new Intl.NumberFormat("ko-KR", {
   maximumFractionDigits: 2,
   minimumFractionDigits: 2,
 });
+const returnPeriods = [
+  { key: "d1", label: "당일", periods: 1 },
+  { key: "d3", label: "3일", periods: 3 },
+  { key: "d5", label: "5일", periods: 5 },
+  { key: "d20", label: "20일", periods: 20 },
+  { key: "d60", label: "60일", periods: 60 },
+  { key: "d120", label: "120일", periods: 120 },
+];
+const relativeWarningThreshold = -5;
 let requestSerial = 0;
 let chartRuntime = null;
 let searchTimer = null;
@@ -187,6 +197,87 @@ function formatRate(value, fallback) {
   return `${sign}${rateFormatter.format(value)}%`;
 }
 
+function formatReturnValue(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${rateFormatter.format(value)} %`;
+}
+
+function returnClass(value) {
+  if (!Number.isFinite(value) || value === 0) {
+    return "flat";
+  }
+
+  return value > 0 ? "up" : "down";
+}
+
+function calcPeriodReturn(items, endIndex, periods) {
+  if (!Array.isArray(items) || endIndex < periods) {
+    return null;
+  }
+
+  const last = items[endIndex];
+  const base = items[endIndex - periods];
+  if (!Number.isFinite(last?.close) || !Number.isFinite(base?.close) || base.close === 0) {
+    return null;
+  }
+
+  return (last.close / base.close - 1) * 100;
+}
+
+function findBenchmarkEndIndex(items, endTime) {
+  if (!Array.isArray(items) || !items.length) {
+    return -1;
+  }
+
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    if (items[i]?.time <= endTime && Number.isFinite(items[i]?.close)) {
+      return i;
+    }
+  }
+
+  return -1;
+}
+
+function renderChartReturnSummary(payload) {
+  if (!els.chartReturnSummary) {
+    return;
+  }
+
+  const items = payload?.items || [];
+  const benchmarkItems = payload?.benchmark?.items || [];
+  if (!items.length) {
+    els.chartReturnSummary.innerHTML = "";
+    return;
+  }
+
+  const endIndex = items.length - 1;
+  const benchmarkEndIndex = findBenchmarkEndIndex(benchmarkItems, items[endIndex].time);
+  const benchmarkLabel = payload?.benchmark?.label || "지수";
+  els.chartReturnSummary.innerHTML = returnPeriods
+    .map((period) => {
+      const absolute = calcPeriodReturn(items, endIndex, period.periods);
+      const benchmark = calcPeriodReturn(benchmarkItems, benchmarkEndIndex, period.periods);
+      const relative = Number.isFinite(absolute) && Number.isFinite(benchmark) ? absolute - benchmark : null;
+      const warning = Number.isFinite(relative) && relative <= relativeWarningThreshold;
+
+      return `
+        <div class="return-card ${warning ? "is-warning" : ""}">
+          <div class="return-card-head">
+            <strong>${period.label}</strong>
+            ${warning ? '<span class="warning-badge">경고</span>' : ""}
+          </div>
+          <span class="${returnClass(absolute)}">(절대: ${formatReturnValue(absolute)})</span>
+          <span class="${returnClass(relative)}" title="${escapeHtml(benchmarkLabel)} 대비">(상대: ${formatReturnValue(relative)})</span>
+        </div>
+      `;
+    })
+    .join("");
+}
+
 function formatPlainNumber(value, digits = 2) {
   if (!Number.isFinite(value)) {
     return "-";
@@ -256,10 +347,7 @@ function marketCapToJo(value) {
     return "-";
   }
   const jo = value / 10000;
-  if (jo >= 100) {
-    return numberFormatter.format(Math.round(jo));
-  }
-  return rateFormatter.format(jo);
+  return `${jo >= 100 ? numberFormatter.format(Math.round(jo)) : rateFormatter.format(jo)}조`;
 }
 
 function eokToJo(value) {
@@ -267,10 +355,7 @@ function eokToJo(value) {
     return "N/A";
   }
   const jo = value / 10000;
-  if (jo >= 10) {
-    return numberFormatter.format(Math.round(jo));
-  }
-  return rateFormatter.format(jo);
+  return `${jo >= 10 ? numberFormatter.format(Math.round(jo)) : rateFormatter.format(jo)}조`;
 }
 
 function formatUsdMarketCap(value) {
@@ -422,6 +507,23 @@ function extraCell(stock) {
   return `<td><span class="sector">${escapeHtml(stock.sector || "-")}</span></td>`;
 }
 
+function periodReturnCell(stock, key) {
+  const item = (stock.periodReturns || []).find((entry) => entry.key === key);
+  const absolute = item?.absolute;
+  const relative = item?.relative;
+  const warning = Number.isFinite(relative) && relative <= relativeWarningThreshold;
+
+  return `
+    <td class="numeric period-return-cell">
+      <div class="period-return-lines ${warning ? "is-warning" : ""}" title="${escapeHtml(item?.benchmarkLabel || "지수")} 대비">
+        <span class="${returnClass(absolute)}"><span class="return-label">절대</span> ${formatReturnValue(absolute)}</span>
+        <span class="${returnClass(relative)}"><span class="return-label">상대</span> ${formatReturnValue(relative)}</span>
+        ${warning ? '<span class="table-warning-badge">경고</span>' : ""}
+      </div>
+    </td>
+  `;
+}
+
 function renderRows(items) {
   els.rows.innerHTML = items
     .map((stock) => {
@@ -449,6 +551,7 @@ function renderRows(items) {
           <td class="numeric">${Number.isFinite(stock.roe) ? `${formatPlainNumber(stock.roe)}%` : "-"}</td>
           <td class="numeric muted-value">${formatUnavailableMetric(stock.pbr)}</td>
           <td class="numeric">${formatNumber(stock.volume)}</td>
+          ${returnPeriods.map((period) => periodReturnCell(stock, period.key)).join("")}
         </tr>`;
     })
     .join("");
@@ -1076,6 +1179,7 @@ async function loadChartData() {
   els.chartTitle.textContent = `${state.selectedName} (${state.selectedCode})`;
   openChartModal();
   const sliced = { ...payload, items: payload.items.slice(-state.chartDays) };
+  renderChartReturnSummary(sliced);
   renderCharts(sliced, ichiPayload);
 }
 

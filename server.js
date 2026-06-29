@@ -19,6 +19,16 @@ const mimeTypes = {
 
 let krxSearchCache = { loadedAt: 0, items: [] };
 let usOhlcvCache = new Map();
+let periodReturnCache = new Map();
+
+const periodReturnDefs = [
+  { key: "d1", label: "당일", periods: 1 },
+  { key: "d3", label: "3일", periods: 3 },
+  { key: "d5", label: "5일", periods: 5 },
+  { key: "d20", label: "20일", periods: 20 },
+  { key: "d60", label: "60일", periods: 60 },
+  { key: "d120", label: "120일", periods: 120 },
+];
 
 function send(res, statusCode, body, contentType = "text/plain; charset=utf-8") {
   res.writeHead(statusCode, {
@@ -30,6 +40,22 @@ function send(res, statusCode, body, contentType = "text/plain; charset=utf-8") 
 
 function sendJson(res, statusCode, payload) {
   send(res, statusCode, JSON.stringify(payload), "application/json; charset=utf-8");
+}
+
+async function mapWithLimit(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 function decodeEucKr(buffer) {
@@ -152,6 +178,107 @@ async function fetchKoreanOhlcv(code, days) {
   return rows.slice(-days);
 }
 
+function benchmarkForMarket(marketId) {
+  if (marketId === "kospi") return { code: "KOSPI", korean: true, label: "KOSPI" };
+  if (marketId === "kosdaq") return { code: "KOSDAQ", korean: true, label: "KOSDAQ" };
+  if (marketId === "dow") return { code: "DIA", korean: false, label: "Dow" };
+  return { code: "NDX", korean: false, label: "NASDAQ 100" };
+}
+
+function findRowEndIndex(rows, endDate) {
+  for (let i = rows.length - 1; i >= 0; i -= 1) {
+    if (rows[i]?.date <= endDate && Number.isFinite(rows[i]?.close)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function calcRowReturn(rows, endIndex, periods) {
+  if (!Array.isArray(rows) || endIndex < periods) {
+    return null;
+  }
+  const last = rows[endIndex];
+  const base = rows[endIndex - periods];
+  if (!Number.isFinite(last?.close) || !Number.isFinite(base?.close) || base.close === 0) {
+    return null;
+  }
+  return (last.close / base.close - 1) * 100;
+}
+
+function buildPeriodReturns(rows, benchmarkRows, benchmarkLabel) {
+  if (!rows.length) {
+    return [];
+  }
+  const stockEndIndex = rows.length - 1;
+  const endDate = rows[stockEndIndex].date;
+  const benchmarkEndIndex = findRowEndIndex(benchmarkRows, endDate);
+  return periodReturnDefs.map((period) => {
+    const absolute = calcRowReturn(rows, stockEndIndex, period.periods);
+    const benchmark = calcRowReturn(benchmarkRows, benchmarkEndIndex, period.periods);
+    return {
+      key: period.key,
+      label: period.label,
+      absolute,
+      relative: Number.isFinite(absolute) && Number.isFinite(benchmark) ? absolute - benchmark : null,
+      benchmark,
+      benchmarkLabel,
+    };
+  });
+}
+
+async function fetchPeriodRows(marketId, code, days) {
+  const isKorean = marketId === "kospi" || marketId === "kosdaq";
+  return isKorean ? fetchKoreanOhlcv(code, days) : fetchUsOhlcv(code, days);
+}
+
+async function enrichPeriodReturns(payload, marketId) {
+  if (!payload?.items?.length) {
+    return payload;
+  }
+
+  const cacheKey = `period:${marketId}`;
+  const cached = periodReturnCache.get(cacheKey);
+  if (cached && Date.now() - cached.loadedAt < 1000 * 60 * 5) {
+    return { ...payload, items: cached.items };
+  }
+
+  const benchmark = benchmarkForMarket(marketId);
+  let benchmarkRows = [];
+  try {
+    benchmarkRows = benchmark.korean
+      ? await fetchKoreanOhlcv(benchmark.code, 380)
+      : await fetchUsOhlcv(benchmark.code, 380);
+  } catch {
+    benchmarkRows = [];
+  }
+
+  const items = await mapWithLimit(payload.items, 4, async (item) => {
+    try {
+      const rows = await fetchPeriodRows(marketId, item.code, 380);
+      return {
+        ...item,
+        periodReturns: buildPeriodReturns(rows, benchmarkRows, benchmark.label),
+      };
+    } catch {
+      return {
+        ...item,
+        periodReturns: periodReturnDefs.map((period) => ({
+          key: period.key,
+          label: period.label,
+          absolute: null,
+          relative: null,
+          benchmark: null,
+          benchmarkLabel: benchmark.label,
+        })),
+      };
+    }
+  });
+
+  periodReturnCache.set(cacheKey, { loadedAt: Date.now(), items });
+  return { ...payload, items };
+}
+
 async function fetchUsOhlcv(code, days) {
   const symbol = code.toUpperCase();
   const cacheKey = `${symbol}:${days}`;
@@ -202,10 +329,12 @@ async function fetchUsOhlcv(code, days) {
     .toISOString()
     .slice(0, 10);
   const to = new Date().toISOString().slice(0, 10);
+  const nasdaqAssetClass = symbol === "NDX" || symbol === "COMP" || symbol.startsWith("^") ? "index" : "stocks";
+  const nasdaqSymbol = symbol.replace(/^\^/, "");
   const nasdaqResp = await fetch(
     `https://api.nasdaq.com/api/quote/${encodeURIComponent(
-      symbol,
-    )}/chart?assetclass=stocks&fromdate=${from}&todate=${to}&limit=9999`,
+      nasdaqSymbol,
+    )}/chart?assetclass=${nasdaqAssetClass}&fromdate=${from}&todate=${to}&limit=9999`,
     {
       headers: {
         "User-Agent":
@@ -435,7 +564,32 @@ async function handleApi(req, res, url) {
         senkouB: indicators.senkouB[idx],
       };
       });
-      sendJson(res, 200, { market: marketId, code, days, timeframe, items });
+      const benchmark = benchmarkForMarket(marketId);
+      let benchmarkItems = [];
+      try {
+        const benchmarkRows = benchmark.korean
+          ? await fetchKoreanOhlcv(benchmark.code, lookbackDays)
+          : await fetchUsOhlcv(benchmark.code, lookbackDays);
+        const benchmarkPeriodRows = aggregateRows(benchmarkRows, timeframe);
+        benchmarkItems = benchmarkPeriodRows.slice(-days).map((r) => ({
+          time: toTime(r.date),
+          close: r.close,
+        }));
+      } catch {
+        benchmarkItems = [];
+      }
+      sendJson(res, 200, {
+        market: marketId,
+        code,
+        days,
+        timeframe,
+        items,
+        benchmark: {
+          code: benchmark.code,
+          label: benchmark.label,
+          items: benchmarkItems,
+        },
+      });
     } catch (error) {
       sendJson(res, 502, { error: "차트 데이터를 가져오지 못했습니다.", detail: error.message });
     }
@@ -451,8 +605,12 @@ async function handleApi(req, res, url) {
     const forceRefresh = url.searchParams.get("refresh") === "1";
     const marketId =
       url.pathname === "/api/kospi-top100" ? "kospi" : url.searchParams.get("market") || "kospi";
+    if (forceRefresh) {
+      periodReturnCache.delete(`period:${marketId}`);
+    }
     const payload = await getMarketPayload(marketId, forceRefresh);
-    sendJson(res, 200, payload);
+    const enrichedPayload = await enrichPeriodReturns(payload, marketId);
+    sendJson(res, 200, enrichedPayload);
   } catch (error) {
     sendJson(res, 502, {
       error: "시장 데이터를 가져오지 못했습니다.",

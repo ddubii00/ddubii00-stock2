@@ -6,7 +6,7 @@
     <title>Market Top Boards</title>
     <link rel="stylesheet" href="/styles.css?v=20260525e" />
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="/app.js?v=20260525u" defer></script>
+    <script src="/app.js?v=20260629c" defer></script>
   </head>
   <body>
     <header class="app-header">
@@ -115,6 +115,12 @@
               <th class="numeric">ROE</th>
               <th class="numeric">PBR</th>
               <th class="numeric">거래량</th>
+              <th class="numeric">당일</th>
+              <th class="numeric">3일</th>
+              <th class="numeric">5일</th>
+              <th class="numeric">20일</th>
+              <th class="numeric">60일</th>
+              <th class="numeric">120일</th>
             </tr>
           </thead>
           <tbody id="stockRows"></tbody>
@@ -138,6 +144,7 @@
             <button type="button" id="applyDaysButton">적용</button>
             <button type="button" id="closeChartButton">닫기</button>
           </header>
+          <div id="chartReturnSummary" class="chart-return-summary"></div>
           <div class="chart-stack">
             <div id="priceLegend" class="chart-legend"></div>
             <div id="priceChart" class="chart-box chart-price"></div>
