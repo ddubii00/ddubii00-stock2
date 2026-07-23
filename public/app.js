@@ -706,7 +706,7 @@ function drawMacdBackground(container, chart, items) {
   });
 }
 
-function drawIchimokuCloud(container, chart, senkouASeries, senkouBSeries, ichiSource, ichi, visible = true) {
+function drawIchimokuCloud(container, chart, senkouASeries, senkouBSeries, senkouAData, senkouBData, visible = true) {
   const existing = container.querySelector(".ichi-cloud-overlay");
   if (existing) existing.remove();
   if (!visible) return { setVisible: () => {} };
@@ -715,8 +715,42 @@ function drawIchimokuCloud(container, chart, senkouASeries, senkouBSeries, ichiS
   canvas.style.position = "absolute";
   canvas.style.inset = "0";
   canvas.style.pointerEvents = "none";
+  canvas.style.zIndex = "2";
   container.appendChild(canvas);
   const dpr = window.devicePixelRatio || 1;
+  const bByTime = new Map(senkouBData.map((point) => [String(point.time), point.value]));
+  const cloudPoints = senkouAData
+    .map((point) => ({
+      time: point.time,
+      a: point.value,
+      b: bByTime.get(String(point.time)),
+    }))
+    .filter((point) => Number.isFinite(point.a) && Number.isFinite(point.b));
+  const paintCloudSegment = (ctx, points, color) => {
+    if (points.length < 2) return;
+    const tops = [];
+    const bottoms = [];
+    for (const point of points) {
+      const x = chart.timeScale().timeToCoordinate(point.time);
+      const yA = senkouASeries.priceToCoordinate(point.a);
+      const yB = senkouBSeries.priceToCoordinate(point.b);
+      if (x === null || yA === null || yB === null) continue;
+      tops.push([x, Math.min(yA, yB)]);
+      bottoms.push([x, Math.max(yA, yB)]);
+    }
+    if (tops.length < 2) return;
+    ctx.beginPath();
+    ctx.moveTo(tops[0][0], tops[0][1]);
+    for (let i = 1; i < tops.length; i += 1) {
+      ctx.lineTo(tops[i][0], tops[i][1]);
+    }
+    for (let i = bottoms.length - 1; i >= 0; i -= 1) {
+      ctx.lineTo(bottoms[i][0], bottoms[i][1]);
+    }
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  };
   const paint = () => {
     const rect = container.getBoundingClientRect();
     canvas.width = Math.max(1, Math.floor(rect.width * dpr));
@@ -726,35 +760,37 @@ function drawIchimokuCloud(container, chart, senkouASeries, senkouBSeries, ichiS
     const ctx = canvas.getContext("2d");
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, rect.width, rect.height);
-    const drawColor = (cond, color) => {
-      ctx.beginPath();
-      let started = false;
-      const tops = [];
-      const bottoms = [];
-      for (let i = 0; i < ichiSource.length; i += 1) {
-        const a = ichi[i]?.senkouA;
-        const b = ichi[i]?.senkouB;
-        if (!Number.isFinite(a) || !Number.isFinite(b) || !cond(a, b)) continue;
-        const x = chart.timeScale().timeToCoordinate(ichiSource[i].time);
-        const yA = senkouASeries.priceToCoordinate(a);
-        const yB = senkouBSeries.priceToCoordinate(b);
-        if (x === null || yA === null || yB === null) continue;
-        tops.push([x, Math.min(yA, yB)]);
-        bottoms.push([x, Math.max(yA, yB)]);
-      }
-      if (tops.length < 2) return;
-      ctx.moveTo(tops[0][0], tops[0][1]);
-      for (const p of tops) ctx.lineTo(p[0], p[1]);
-      for (let i = bottoms.length - 1; i >= 0; i -= 1) ctx.lineTo(bottoms[i][0], bottoms[i][1]);
-      ctx.closePath();
-      ctx.fillStyle = color;
-      ctx.fill();
+    let segment = [];
+    let direction = null;
+    const flush = () => {
+      if (!segment.length || !direction) return;
+      paintCloudSegment(
+        ctx,
+        segment,
+        direction === "positive" ? "rgba(239,68,68,0.22)" : "rgba(37,99,235,0.20)",
+      );
     };
-    drawColor((a, b) => a > b, "rgba(239,68,68,0.22)");
-    drawColor((a, b) => a < b, "rgba(37,99,235,0.20)");
+    for (const point of cloudPoints) {
+      const nextDirection = point.a > point.b ? "positive" : point.a < point.b ? "negative" : null;
+      if (!nextDirection) {
+        flush();
+        segment = [];
+        direction = null;
+        continue;
+      }
+      if (direction && nextDirection !== direction) {
+        flush();
+        segment = segment.length ? [segment[segment.length - 1], point] : [point];
+      } else {
+        segment.push(point);
+      }
+      direction = nextDirection;
+    }
+    flush();
   };
   paint();
   requestAnimationFrame(paint); // 차트가 실제로 렌더된 뒤 한 번 더 보정
+  chart.timeScale().subscribeVisibleLogicalRangeChange(paint);
   chart.timeScale().subscribeVisibleTimeRangeChange(paint);
   return {
     setVisible: (v) => {
@@ -998,8 +1034,8 @@ function renderCharts(payload, ichimokuPayload) {
     ichimokuChart,
     senkouASeries,
     senkouBSeries,
-    ichiSource,
-    ichi,
+    senkouAData,
+    senkouBData,
     true,
   );
 
