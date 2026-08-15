@@ -230,6 +230,7 @@ select:focus,
 .table-wrap {
   position: relative;
   margin-top: 14px;
+  max-height: calc(100vh - 280px);
   overflow: auto;
 }
 
@@ -470,9 +471,12 @@ select:focus,
 }
 
 table {
+  --rank-col-width: 76px;
+  --name-col-width: 180px;
   width: 100%;
   min-width: 1900px;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 th,
@@ -485,7 +489,7 @@ td {
 th {
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 3;
   background: var(--surface-strong);
   color: #344054;
   font-size: 0.82rem;
@@ -496,7 +500,50 @@ th {
   white-space: nowrap;
 }
 
+thead th:first-child,
+tbody td:first-child {
+  position: sticky;
+  left: 0;
+  width: var(--rank-col-width);
+  min-width: var(--rank-col-width);
+  max-width: var(--rank-col-width);
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--line), 8px 0 14px rgba(15, 23, 42, 0.04);
+}
+
+thead th:nth-child(2),
+tbody td:nth-child(2) {
+  position: sticky;
+  left: var(--rank-col-width);
+  min-width: var(--name-col-width);
+  background: var(--surface);
+  box-shadow: 1px 0 0 var(--line), 8px 0 14px rgba(15, 23, 42, 0.04);
+}
+
+thead th:first-child {
+  z-index: 5;
+  background: var(--surface-strong);
+}
+
+thead th:nth-child(2) {
+  z-index: 5;
+  background: var(--surface-strong);
+}
+
+tbody td:first-child {
+  z-index: 2;
+}
+
+tbody td:nth-child(2) {
+  z-index: 2;
+}
+
 tbody tr:hover {
+  background: #f8fbfc;
+}
+
+tbody tr:hover td:first-child,
+tbody tr:hover td:nth-child(2) {
   background: #f8fbfc;
 }
 
@@ -506,7 +553,7 @@ tbody tr:hover {
 }
 
 .rank {
-  width: 62px;
+  width: var(--rank-col-width);
   color: var(--muted);
   font-weight: 800;
 }
