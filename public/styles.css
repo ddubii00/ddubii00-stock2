@@ -230,7 +230,7 @@ select:focus,
 .table-wrap {
   position: relative;
   margin-top: 14px;
-  max-height: calc(100vh - 280px);
+  height: clamp(560px, calc(100vh - 220px), 760px);
   overflow: auto;
 }
 
