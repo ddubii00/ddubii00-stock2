@@ -350,12 +350,28 @@ function marketCapToJo(value) {
   return `${jo >= 100 ? numberFormatter.format(Math.round(jo)) : rateFormatter.format(jo)}조`;
 }
 
+function marketCapToJoNumber(value) {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+  const jo = value / 10000;
+  return jo >= 100 ? numberFormatter.format(Math.round(jo)) : rateFormatter.format(jo);
+}
+
 function eokToJo(value) {
   if (!Number.isFinite(value)) {
     return "N/A";
   }
   const jo = value / 10000;
   return `${jo >= 10 ? numberFormatter.format(Math.round(jo)) : rateFormatter.format(jo)}조`;
+}
+
+function eokToJoNumber(value) {
+  if (!Number.isFinite(value)) {
+    return "N/A";
+  }
+  const jo = value / 10000;
+  return jo >= 10 ? numberFormatter.format(Math.round(jo)) : rateFormatter.format(jo);
 }
 
 function formatUsdMarketCap(value) {
@@ -497,7 +513,7 @@ function updateMetrics(visibleItems) {
 
 function extraCell(stock) {
   if (state.meta.extraType === "marketCap") {
-    return `<td class="numeric">${marketCapToJo(stock.marketCap)}</td>`;
+    return `<td class="numeric">${marketCapToJoNumber(stock.marketCap)}</td>`;
   }
 
   if (state.meta.extraType === "marketCapUsd") {
@@ -545,8 +561,8 @@ function renderRows(items) {
           </td>
           <td class="numeric ${movement}">${escapeHtml(formatChange(stock))}</td>
           ${extraCell(stock)}
-          <td class="numeric muted-value">${eokToJo(stock.sales)}</td>
-          <td class="numeric muted-value">${eokToJo(stock.operatingProfit)}</td>
+          <td class="numeric muted-value">${eokToJoNumber(stock.sales)}</td>
+          <td class="numeric muted-value">${eokToJoNumber(stock.operatingProfit)}</td>
           <td class="numeric">${formatPlainNumber(stock.per)}</td>
           <td class="numeric">${Number.isFinite(stock.roe) ? `${formatPlainNumber(stock.roe)}%` : "-"}</td>
           <td class="numeric muted-value">${formatUnavailableMetric(stock.pbr)}</td>
