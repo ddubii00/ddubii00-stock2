@@ -1,7 +1,7 @@
 const http = require("node:http");
 const { readFile } = require("node:fs/promises");
 const path = require("node:path");
-const { getMarketPayload, getMarkets } = require("./market-data");
+const { getKoreanScreenerPayload, getMarketPayload, getMarkets } = require("./market-data");
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 5173);
@@ -113,13 +113,14 @@ async function searchSymbols(marketId, query) {
         marketId === "kospi" ? x.marketType === "유가" : marketId === "kosdaq" ? x.marketType === "코스닥" : true,
       )
       .filter((x) => x.name.toLowerCase().includes(q) || x.code.includes(q))
-      .slice(0, 20);
+      .slice(0, 20)
+      .map((x) => ({ ...x, market: marketId }));
   }
   const payload = await getMarketPayload(marketId);
   return payload.items
     .filter((x) => x.name.toLowerCase().includes(q) || x.code.toLowerCase().includes(q))
     .slice(0, 20)
-    .map((x) => ({ name: x.name, code: x.code }));
+    .map((x) => ({ name: x.name, code: x.code, market: marketId }));
 }
 
 function parseNumeric(text) {
@@ -523,6 +524,26 @@ async function handleApi(req, res, url) {
       sendJson(res, 200, { market: marketId, q, items });
     } catch (error) {
       sendJson(res, 502, { error: "종목 검색에 실패했습니다.", detail: error.message });
+    }
+    return;
+  }
+
+  if (url.pathname === "/api/screener") {
+    try {
+      const marketId = (url.searchParams.get("market") || "kospi").toLowerCase();
+      const sorts = [1, 2, 3].map((index) => ({
+        metric:
+          url.searchParams.get(`sort${index}`) ||
+          (index === 1 ? url.searchParams.get("metric") || "marketCap" : ""),
+        direction: url.searchParams.get(`direction${index}`) || "desc",
+      }));
+      const scope = url.searchParams.get("scope") || "top100";
+      const limit = Number(url.searchParams.get("limit") || 100);
+      const forceRefresh = url.searchParams.get("refresh") === "1";
+      const payload = await getKoreanScreenerPayload(marketId, sorts, scope, limit, forceRefresh);
+      sendJson(res, 200, payload);
+    } catch (error) {
+      sendJson(res, 502, { error: "종목순위 데이터를 가져오지 못했습니다.", detail: error.message });
     }
     return;
   }

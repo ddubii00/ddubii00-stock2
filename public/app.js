@@ -18,8 +18,15 @@ const state = {
   error: "",
   sort: "rank",
   market: "kospi",
+  screenerMarket: "kospi",
+  screenerScope: "top100",
+  screenerLimit: 100,
+  screenerSorts: [
+    { metric: "marketCap", direction: "desc" },
+  ],
   selectedCode: "",
   selectedName: "",
+  selectedMarket: "kospi",
   chartDays: 200,
   chartFetchDays: 700,
   chartTimeframe: "day",
@@ -34,6 +41,7 @@ const marketLabels = {
   kosdaq: "KOSDAQ Top 50",
   kospi: "KOSPI Top 100",
   nasdaq100: "NASDAQ 100",
+  screener: "종목순위",
 };
 
 const els = {
@@ -46,12 +54,24 @@ const els = {
   marketButtons: document.querySelectorAll(".market-tab"),
   message: document.querySelector("#message"),
   pageTitle: document.querySelector("#pageTitle"),
+  priceHeader: document.querySelector("#priceHeader"),
   rankHeader: document.querySelector("#rankHeader"),
   refreshButton: document.querySelector("#refreshButton"),
   rows: document.querySelector("#stockRows"),
   searchInput: document.querySelector("#searchInput"),
   searchSuggestions: document.querySelector("#searchSuggestions"),
   searchSuggestionMenu: document.querySelector("#searchSuggestionMenu"),
+  screenerControls: document.querySelector("#screenerControls"),
+  screenerMarketSelect: document.querySelector("#screenerMarketSelect"),
+  screenerScopeSelect: document.querySelector("#screenerScopeSelect"),
+  screenerLimitSelect: document.querySelector("#screenerLimitSelect"),
+  screenerSortSelects: [
+    document.querySelector("#screenerSort1Select"),
+  ],
+  screenerDirectionSelects: [
+    document.querySelector("#screenerDirection1Select"),
+  ],
+  applyScreenerButton: document.querySelector("#applyScreenerButton"),
   sortSelect: document.querySelector("#sortSelect"),
   sourceLabel: document.querySelector("#sourceLabel"),
   totalMarketCap: document.querySelector("#totalMarketCap"),
@@ -119,6 +139,9 @@ function makeLegend(container, items) {
 
 function renderSearchSuggestions(items) {
   state.searchSuggestions = items;
+  if (!els.searchSuggestions || !els.searchSuggestionMenu) {
+    return;
+  }
   els.searchSuggestions.innerHTML = items
     .map((x) => `<option value="${escapeHtml(`${x.name} (${x.code})`)}"></option>`)
     .join("");
@@ -132,7 +155,9 @@ function renderSearchSuggestions(items) {
       (x) =>
         `<button type="button" class="search-suggestion-item" data-code="${escapeHtml(
           x.code,
-        )}" data-name="${escapeHtml(x.name)}">${escapeHtml(x.name)} (${escapeHtml(x.code)})</button>`,
+        )}" data-name="${escapeHtml(x.name)}" data-market="${escapeHtml(
+          x.market || (state.market === "screener" ? state.screenerMarket : state.market),
+        )}">${escapeHtml(x.name)} (${escapeHtml(x.code)})</button>`,
     )
     .join("");
   els.searchSuggestionMenu.style.display = "block";
@@ -141,10 +166,13 @@ function renderSearchSuggestions(items) {
       event.preventDefault();
       const code = button.dataset.code || "";
       const name = button.dataset.name || "";
-      els.searchInput.value = `${name} (${code})`;
+      const marketId = button.dataset.market || "";
+      if (els.searchInput) {
+        els.searchInput.value = `${name} (${code})`;
+      }
       els.searchSuggestionMenu.style.display = "none";
       try {
-        await openChartByCode(code, name);
+        await openChartByCode(code, name, marketId);
       } catch (error) {
         state.error = `차트 데이터를 가져오지 못했습니다. ${error.message}`;
         render();
@@ -159,7 +187,10 @@ async function loadSearchSuggestions(query) {
     return;
   }
   try {
-    const params = new URLSearchParams({ market: state.market, q: query.trim() });
+    const params = new URLSearchParams({
+      market: state.market === "screener" ? state.screenerMarket : state.market,
+      q: query.trim(),
+    });
     const response = await fetch(`/api/search?${params.toString()}`);
     const payload = await response.json();
     if (!response.ok) return;
@@ -169,9 +200,11 @@ async function loadSearchSuggestions(query) {
   }
 }
 
-async function openChartByCode(code, name) {
+async function openChartByCode(code, name, marketId) {
   state.selectedCode = code;
   state.selectedName = name || code;
+  state.selectedMarket =
+    marketId || (state.market === "screener" ? state.screenerMarket : state.market);
   await loadChartData();
 }
 
@@ -297,6 +330,14 @@ function formatUnavailableMetric(value, suffix = "") {
   return `${formatPlainNumber(value)}${suffix}`;
 }
 
+function formatOptionalNumber(value, digits = 2, suffix = "") {
+  if (!Number.isFinite(value)) {
+    return "-";
+  }
+
+  return `${formatPlainNumber(value, digits)}${suffix}`;
+}
+
 function formatPrice(stock) {
   if (stock.priceText) {
     return stock.currency === "USD" ? `$${stock.priceText}` : stock.priceText;
@@ -408,11 +449,17 @@ function currentSortOptions() {
   const options = [
     { label: state.meta.rankLabel || "순서", value: "rank" },
     { label: "등락률", value: "changeRate" },
-    { label: "현재가", value: "price" },
+    { label: "주가", value: "price" },
     { label: "거래량", value: "volume" },
+    { label: "자기자본", value: "equity" },
     { label: "PER", value: "per" },
+    { label: "Forward PER", value: "forwardPer" },
     { label: "ROE", value: "roe" },
     { label: "PBR", value: "pbr" },
+    { label: "거래액", value: "tradingValue" },
+    { label: "ROA", value: "roa" },
+    { label: "유보율", value: "reserveRatio" },
+    { label: "EPS", value: "eps" },
     { label: "종목명", value: "name" },
   ];
 
@@ -424,6 +471,9 @@ function currentSortOptions() {
 }
 
 function updateSortOptions() {
+  if (!els.sortSelect) {
+    return;
+  }
   const options = currentSortOptions();
   if (!options.some((option) => option.value === state.sort)) {
     state.sort = "rank";
@@ -439,6 +489,57 @@ function updateSortOptions() {
     .join("");
 }
 
+function normalizeSortDirection(direction) {
+  return direction === "asc" ? "asc" : "desc";
+}
+
+function compareItemsByMetric(a, b, metric, direction = "desc") {
+  const multiplier = normalizeSortDirection(direction) === "asc" ? 1 : -1;
+
+  if (metric === "name") {
+    return a.name.localeCompare(b.name, "ko") * multiplier;
+  }
+
+  if (metric === "rank") {
+    return (a.rank - b.rank) * multiplier;
+  }
+
+  const aValue = a[metric];
+  const bValue = b[metric];
+  if (!Number.isFinite(aValue) && !Number.isFinite(bValue)) {
+    return 0;
+  }
+  if (!Number.isFinite(aValue)) {
+    return 1;
+  }
+  if (!Number.isFinite(bValue)) {
+    return -1;
+  }
+  return (aValue - bValue) * multiplier;
+}
+
+function activeScreenerSorts() {
+  return state.screenerSorts
+    .filter((sort) => sort.metric)
+    .slice(0, 1);
+}
+
+function compareItems(a, b) {
+  if (state.market === "screener") {
+    const sorts = activeScreenerSorts();
+    for (const sort of sorts) {
+      const result = compareItemsByMetric(a, b, sort.metric, sort.direction);
+      if (result !== 0) {
+        return result;
+      }
+    }
+    return a.rank - b.rank;
+  }
+
+  const direction = state.sort === "rank" || state.sort === "name" ? "asc" : "desc";
+  return compareItemsByMetric(a, b, state.sort, direction) || a.rank - b.rank;
+}
+
 function getFilteredItems() {
   const query = state.query.trim().toLowerCase();
   let items = state.items.filter((item) => {
@@ -452,28 +553,7 @@ function getFilteredItems() {
     return matchesQuery && matchesDirection;
   });
 
-  items = [...items].sort((a, b) => {
-    if (state.sort === "name") {
-      return a.name.localeCompare(b.name, "ko");
-    }
-
-    if (state.sort === "rank") {
-      return a.rank - b.rank;
-    }
-
-    const aValue = a[state.sort];
-    const bValue = b[state.sort];
-    if (!Number.isFinite(aValue) && !Number.isFinite(bValue)) {
-      return a.rank - b.rank;
-    }
-    if (!Number.isFinite(aValue)) {
-      return 1;
-    }
-    if (!Number.isFinite(bValue)) {
-      return -1;
-    }
-    return bValue - aValue || a.rank - b.rank;
-  });
+  items = [...items].sort(compareItems);
 
   return items;
 }
@@ -549,7 +629,9 @@ function renderRows(items) {
           <td class="rank">${formatNumber(stock.rank)}</td>
           <td>
             <div class="stock-name">
-              <a href="#" data-code="${escapeHtml(stock.code)}" data-name="${escapeHtml(stock.name)}" class="stock-link">
+              <a href="#" data-code="${escapeHtml(stock.code)}" data-name="${escapeHtml(stock.name)}" data-market="${escapeHtml(
+                stock.market || (state.market === "screener" ? state.screenerMarket : state.market),
+              )}" class="stock-link">
                 ${escapeHtml(stock.name)}
               </a>
               <span class="code">${escapeHtml(stock.code)}</span>
@@ -563,11 +645,16 @@ function renderRows(items) {
           ${extraCell(stock)}
           <td class="numeric muted-value">${eokToJoNumber(stock.sales)}</td>
           <td class="numeric muted-value">${eokToJoNumber(stock.operatingProfit)}</td>
+          <td class="numeric muted-value">${eokToJoNumber(stock.equity)}</td>
           <td class="numeric">${formatPlainNumber(stock.per)}</td>
+          <td class="numeric muted-value">${formatOptionalNumber(stock.forwardPer, 2)}</td>
           <td class="numeric">${Number.isFinite(stock.roe) ? `${formatPlainNumber(stock.roe)}%` : "-"}</td>
           <td class="numeric muted-value">${formatUnavailableMetric(stock.pbr)}</td>
           <td class="numeric">${formatNumber(stock.volume)}</td>
-          ${returnPeriods.map((period) => periodReturnCell(stock, period.key)).join("")}
+          <td class="numeric muted-value">${formatOptionalNumber(stock.tradingValue, 0)}</td>
+          <td class="numeric muted-value">${formatOptionalNumber(stock.roa, 2, "%")}</td>
+          <td class="numeric muted-value">${formatOptionalNumber(stock.reserveRatio, 2, "%")}</td>
+          <td class="numeric muted-value">${formatOptionalNumber(stock.eps, 0)}</td>
         </tr>`;
     })
     .join("");
@@ -1107,14 +1194,15 @@ function renderCharts(payload, ichimokuPayload) {
 
 async function loadChartData() {
   if (!state.selectedCode) return;
+  const chartMarket = state.selectedMarket || (state.market === "screener" ? state.screenerMarket : state.market);
   const params = new URLSearchParams({
-    market: state.market,
+    market: chartMarket,
     code: state.selectedCode,
     days: String(state.chartFetchDays),
     timeframe: state.chartTimeframe,
   });
   const ichiParams = new URLSearchParams({
-    market: state.market,
+    market: chartMarket,
     code: state.selectedCode,
     days: String(Math.min(1200, state.ichimokuDays + 260)),
     timeframe: state.ichimokuTimeframe,
@@ -1141,11 +1229,39 @@ function updateChrome() {
   els.rankHeader.textContent = state.meta.rankLabel || "순서";
   els.extraHeader.textContent =
     state.meta.extraType === "marketCap" ? "시가총액(조)" : state.meta.extraLabel || "섹터";
+  if (els.priceHeader) {
+    els.priceHeader.textContent = state.meta.currency === "USD" ? "주가($)" : "주가(원)";
+  }
   els.extraHeader.className =
     state.meta.extraType === "marketCap" || state.meta.extraType === "marketCapUsd"
       ? "numeric"
       : "";
   els.fourthMetricLabel.textContent = state.meta.metricLabel || "평균 거래량";
+  if (els.screenerControls) {
+    els.screenerControls.classList.toggle("is-visible", state.market === "screener");
+  }
+  if (els.screenerMarketSelect) {
+    els.screenerMarketSelect.value = state.screenerMarket;
+  }
+  if (els.screenerScopeSelect) {
+    els.screenerScopeSelect.value = state.screenerScope;
+  }
+  if (els.screenerLimitSelect) {
+    els.screenerLimitSelect.value = String(state.screenerLimit);
+  }
+  els.screenerSortSelects.forEach((select, index) => {
+    if (select) {
+      select.value = state.screenerSorts[index]?.metric || "";
+    }
+  });
+  els.screenerDirectionSelects.forEach((select, index) => {
+    if (select) {
+      select.value = state.screenerSorts[index]?.direction || "desc";
+    }
+  });
+  if (els.applyScreenerButton) {
+    els.applyScreenerButton.disabled = state.loading;
+  }
 
   els.marketButtons.forEach((button) => {
     const active = button.dataset.market === state.market;
@@ -1188,7 +1304,7 @@ function render() {
     link.addEventListener("click", async (event) => {
       event.preventDefault();
       try {
-        await openChartByCode(link.dataset.code || "", link.dataset.name || "");
+        await openChartByCode(link.dataset.code || "", link.dataset.name || "", link.dataset.market || "");
       } catch (error) {
         state.error = `차트 데이터를 가져오지 못했습니다. ${error.message}`;
         render();
@@ -1205,12 +1321,24 @@ async function loadStocks(forceRefresh = false) {
   render();
 
   try {
-    const params = new URLSearchParams({ market: state.market });
+    const isScreener = state.market === "screener";
+    const params = new URLSearchParams({
+      market: isScreener ? state.screenerMarket : state.market,
+    });
+    if (isScreener) {
+      params.set("scope", state.screenerScope);
+      params.set("limit", String(state.screenerLimit));
+      activeScreenerSorts().forEach((sort, index) => {
+        const paramIndex = index + 1;
+        params.set(`sort${paramIndex}`, sort.metric);
+        params.set(`direction${paramIndex}`, sort.direction);
+      });
+    }
     if (forceRefresh) {
       params.set("refresh", "1");
     }
 
-    const response = await fetch(`/api/market?${params.toString()}`);
+    const response = await fetch(`/${isScreener ? "api/screener" : "api/market"}?${params.toString()}`);
     const payload = await response.json();
     if (!response.ok) {
       throw new Error(payload.detail || payload.error || "데이터 요청 실패");
@@ -1248,7 +1376,7 @@ async function loadStocks(forceRefresh = false) {
   }
 }
 
-els.searchInput.addEventListener("input", (event) => {
+els.searchInput?.addEventListener("input", (event) => {
   const value = event.target.value;
   state.query = value;
   render();
@@ -1258,23 +1386,29 @@ els.searchInput.addEventListener("input", (event) => {
   }, 180);
 });
 
-els.searchInput.addEventListener("change", async () => {
+els.searchInput?.addEventListener("change", async () => {
   const value = els.searchInput.value.trim();
   const codeMatch = value.match(/\(([^)]+)\)\s*$/);
   if (!codeMatch) return;
   const code = codeMatch[1].trim().toUpperCase();
   const picked = state.searchSuggestions.find((x) => x.code.toUpperCase() === code);
   if (!picked) return;
-  els.searchSuggestionMenu.style.display = "none";
+  if (els.searchSuggestionMenu) {
+    els.searchSuggestionMenu.style.display = "none";
+  }
   try {
-    await openChartByCode(picked.code, picked.name);
+    await openChartByCode(
+      picked.code,
+      picked.name,
+      picked.market || (state.market === "screener" ? state.screenerMarket : state.market),
+    );
   } catch (error) {
     state.error = `차트 데이터를 가져오지 못했습니다. ${error.message}`;
     render();
   }
 });
 
-els.searchInput.addEventListener("keydown", async (event) => {
+els.searchInput?.addEventListener("keydown", async (event) => {
   if (event.key !== "Enter") return;
   const value = els.searchInput.value.trim();
   const codeMatch = value.match(/\(([^)]+)\)\s*$/);
@@ -1284,7 +1418,11 @@ els.searchInput.addEventListener("keydown", async (event) => {
   const picked = state.searchSuggestions.find((x) => x.code.toUpperCase() === code);
   if (!picked) return;
   try {
-    await openChartByCode(picked.code, picked.name);
+    await openChartByCode(
+      picked.code,
+      picked.name,
+      picked.market || (state.market === "screener" ? state.screenerMarket : state.market),
+    );
   } catch (error) {
     state.error = `차트 데이터를 가져오지 못했습니다. ${error.message}`;
     render();
@@ -1292,23 +1430,54 @@ els.searchInput.addEventListener("keydown", async (event) => {
 });
 
 document.addEventListener("click", (event) => {
-  if (!els.searchSuggestionMenu) return;
+  if (!els.searchSuggestionMenu || !els.searchInput) return;
   if (els.searchSuggestionMenu.contains(event.target) || els.searchInput.contains(event.target)) return;
   els.searchSuggestionMenu.style.display = "none";
 });
 
-els.directionFilter.addEventListener("change", (event) => {
+els.directionFilter?.addEventListener("change", (event) => {
   state.direction = event.target.value;
   render();
 });
 
-els.sortSelect.addEventListener("change", (event) => {
+els.sortSelect?.addEventListener("change", (event) => {
   state.sort = event.target.value;
+  if (state.market === "screener") {
+    state.screenerSorts[0].metric = state.sort;
+    if (els.screenerSortSelects[0]) {
+      els.screenerSortSelects[0].value = state.sort;
+    }
+  }
   render();
 });
 
 els.refreshButton.addEventListener("click", () => {
   loadStocks(true);
+});
+
+els.applyScreenerButton?.addEventListener("click", () => {
+  state.screenerMarket = els.screenerMarketSelect.value;
+  state.screenerScope = els.screenerScopeSelect.value;
+  state.screenerLimit = Number(els.screenerLimitSelect.value || 100);
+  state.screenerSorts = els.screenerSortSelects.map((select, index) => ({
+    metric: select.value,
+    direction: normalizeSortDirection(els.screenerDirectionSelects[index].value),
+  }));
+  if (!state.screenerSorts[0].metric) {
+    state.screenerSorts[0].metric = "marketCap";
+  }
+  state.sort = state.screenerSorts[0].metric === "rank" ? "rank" : state.screenerSorts[0].metric;
+  state.items = [];
+  state.query = "";
+  state.direction = "all";
+  if (els.searchInput) {
+    els.searchInput.value = "";
+  }
+  if (els.directionFilter) {
+    els.directionFilter.value = "all";
+  }
+  renderSearchSuggestions([]);
+  loadStocks();
 });
 
 els.applyDaysButton.addEventListener("click", async () => {
@@ -1375,10 +1544,14 @@ els.marketButtons.forEach((button) => {
     state.items = [];
     state.query = "";
     state.direction = "all";
-    state.sort = "rank";
-    els.searchInput.value = "";
+    state.sort = state.market === "screener" ? activeScreenerSorts()[0]?.metric || "marketCap" : "rank";
+    if (els.searchInput) {
+      els.searchInput.value = "";
+    }
     renderSearchSuggestions([]);
-    els.directionFilter.value = "all";
+    if (els.directionFilter) {
+      els.directionFilter.value = "all";
+    }
     loadStocks();
   });
 });

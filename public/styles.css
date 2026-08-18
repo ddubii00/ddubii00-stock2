@@ -114,6 +114,7 @@ main {
 .status-band,
 .metrics,
 .controls,
+.screener-controls,
 .table-wrap {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -202,6 +203,40 @@ main {
   overflow: visible;
   position: relative;
   z-index: 5;
+}
+
+.screener-controls {
+  display: none;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 14px;
+  align-items: end;
+  margin-top: 14px;
+  padding: 16px;
+}
+
+.screener-controls label {
+  min-width: 0;
+}
+
+.screener-controls.is-visible {
+  display: grid;
+}
+
+.screener-controls button {
+  min-height: 44px;
+  align-self: end;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 0 18px;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.screener-controls button:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .controls label {
@@ -474,7 +509,7 @@ table {
   --rank-col-width: 76px;
   --name-col-width: 180px;
   width: 100%;
-  min-width: 1900px;
+  min-width: 2450px;
   border-collapse: separate;
   border-spacing: 0;
 }

@@ -10,11 +10,14 @@ const MARKETCAP_DOW_URL =
   "https://marketcap.company/stock-indices/dow-jones-industrial-average-index-market-cap/";
 const STOOQ_QUOTE_URL = "https://stooq.com/q/l/";
 const NAVER_ITEM_MAIN_URL = "https://finance.naver.com/item/main.naver?code=";
+const WISE_REPORT_FINANCIAL_SUMMARY_URL = "https://comp.wisereport.co.kr/company/cF1001.aspx";
 const CACHE_TTL_MS = 45_000;
 const US_QUOTE_CONCURRENCY = 4;
 const KOR_FUNDAMENTAL_CONCURRENCY = 8;
 
 const cache = new Map();
+const screenerCache = new Map();
+const screenerDetailCache = new Map();
 const inflightFetches = new Map();
 
 const markets = {
@@ -170,20 +173,77 @@ function parseUsdMarketCap(text) {
 }
 
 function parseNaverFundamentalRowValue(html, rowTitle) {
-  const rowRegex = new RegExp(
-    `<tr[^>]*>\\s*<th[^>]*>\\s*<strong>${rowTitle}<\\/strong>[\\s\\S]*?<\\/tr>`,
-    "i",
-  );
-  const rowMatch = html.match(rowRegex);
-  if (!rowMatch) {
+  const values = parseNaverFundamentalRowValues(html, rowTitle);
+  return values.length ? values[values.length - 1] : null;
+}
+
+function parseNaverFundamentalRowValues(html, rowTitle) {
+  const titlePattern = new RegExp(rowTitle, "i");
+  const rowRegex = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
+
+  for (const rowMatch of html.matchAll(rowRegex)) {
+    const row = rowMatch[0];
+    const headerText = cleanText(row.match(/<th[^>]*>([\s\S]*?)<\/th>/i)?.[1] || "");
+    if (!titlePattern.test(headerText)) {
+      continue;
+    }
+
+    const values = [...row.matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)]
+      .map((match) => parseNumeric(cleanText(match[1])))
+      .filter((value) => Number.isFinite(value));
+
+    return values;
+  }
+
+  return [];
+}
+
+function parseWiseReportForwardAnnualValue(html, rowTitle) {
+  const values = parseNaverFundamentalRowValues(html, rowTitle);
+  if (!values.length) {
     return null;
   }
 
-  const cellTexts = [...rowMatch[0].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/gi)]
-    .map((match) => cleanText(match[1]))
-    .filter((text) => text && text !== "&nbsp;");
-  const latest = cellTexts[cellTexts.length - 1];
-  return parseNumeric(latest);
+  return values.length >= 5 ? values[4] : values[values.length - 1];
+}
+
+function parseNaverSiseValue(html, label) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`<th[^>]*>\\s*${escaped}\\s*<\\/th>\\s*<td[^>]*>([\\s\\S]*?)<\\/td>`, "i"),
+    new RegExp(`<dt[^>]*>\\s*${escaped}\\s*<\\/dt>\\s*<dd[^>]*>([\\s\\S]*?)<\\/dd>`, "i"),
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match) {
+      return parseNumeric(cleanText(match[1]));
+    }
+  }
+
+  return null;
+}
+
+async function fetchWiseReportFinancialSummaryHtml(code) {
+  const params = new URLSearchParams({
+    cmp_cd: code,
+    finGubun: "MAIN",
+  });
+  const response = await fetch(`${WISE_REPORT_FINANCIAL_SUMMARY_URL}?${params.toString()}`, {
+    headers: {
+      "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+    },
+  });
+
+  if (!response.ok) {
+    return "";
+  }
+
+  const buffer = new Uint8Array(await response.arrayBuffer());
+  const utf8 = new TextDecoder("utf-8").decode(buffer);
+  return utf8.includes("매출액") ? utf8 : new TextDecoder("euc-kr").decode(buffer);
 }
 
 function signedText(value, formatter = (number) => String(number)) {
@@ -262,8 +322,10 @@ function parseMarketCapPage(html) {
       volumeText: numberCells[7] || "",
       per: parseNumeric(numberCells[8]),
       roe: parseNumeric(numberCells[9]),
+      forwardPer: null,
       sales: null,
       operatingProfit: null,
+      equity: null,
       pbr: null,
       detailUrl: `https://finance.naver.com/item/main.naver?code=${code}`,
     });
@@ -331,9 +393,20 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
           }
 
           const html = await response.text();
-          const pbr = parseNaverFundamentalRowValue(html, "PBR\\(배\\)");
-          const sales = parseNaverFundamentalRowValue(html, "매출액");
-          const operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
+          const pbr = parseNaverFundamentalRowValue(html, "PBR") ?? parseNaverSiseValue(html, "PBR");
+          let sales = parseNaverFundamentalRowValue(html, "매출액");
+          let operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
+          let equity = parseNaverFundamentalRowValue(html, "자본총계");
+          let forwardPer = null;
+          const financialHtml = await fetchWiseReportFinancialSummaryHtml(item.code);
+          if (financialHtml) {
+            sales = Number.isFinite(sales) ? sales : parseNaverFundamentalRowValue(financialHtml, "매출액");
+            operatingProfit = Number.isFinite(operatingProfit)
+              ? operatingProfit
+              : parseNaverFundamentalRowValue(financialHtml, "영업이익");
+            equity = Number.isFinite(equity) ? equity : parseNaverFundamentalRowValue(financialHtml, "자본총계");
+            forwardPer = parseWiseReportForwardAnnualValue(financialHtml, "PER");
+          }
           return {
             ...item,
             pbr: Number.isFinite(pbr) ? pbr : item.pbr,
@@ -341,6 +414,8 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
             operatingProfit: Number.isFinite(operatingProfit)
               ? operatingProfit
               : item.operatingProfit,
+            equity: Number.isFinite(equity) ? equity : item.equity,
+            forwardPer: Number.isFinite(forwardPer) ? forwardPer : item.forwardPer,
           };
         } catch {
           return item;
@@ -356,6 +431,274 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
       items: enrichedItems,
     };
   });
+}
+
+const KOREAN_SCREENER_METRICS = new Set([
+  "rank",
+  "marketCap",
+  "changeRate",
+  "volume",
+  "tradingValue",
+  "per",
+  "forwardPer",
+  "equity",
+  "roe",
+  "pbr",
+  "roa",
+  "reserveRatio",
+  "eps",
+  "name",
+]);
+const KOREAN_SCREENER_DETAIL_METRICS = new Set([
+  "sales",
+  "operatingProfit",
+  "equity",
+  "forwardPer",
+  "pbr",
+  "roa",
+  "reserveRatio",
+  "eps",
+]);
+const KOREAN_LISTED_FUND_NAME_PATTERN =
+  /^(ACE|ARIRANG|BNK|FOCUS|HANARO|HK|KBSTAR|KODEX|KOSEF|PLUS|RISE|SOL|TIGER|TIMEFOLIO|TREX|UNICORN|WOORI)\b|(?:\b|[가-힣])(ETF|ETN)\b/i;
+
+function isKoreanListedFundItem(item) {
+  return KOREAN_LISTED_FUND_NAME_PATTERN.test(String(item.name || ""));
+}
+
+function normalizeSortDirection(direction) {
+  return direction === "asc" ? "asc" : "desc";
+}
+
+function normalizeScreenerSorts(sorts) {
+  const normalized = (Array.isArray(sorts) ? sorts : [])
+    .map((sort) => ({
+      metric: KOREAN_SCREENER_METRICS.has(sort?.metric) ? sort.metric : "",
+      direction: normalizeSortDirection(sort?.direction),
+    }))
+    .filter((sort) => sort.metric);
+
+  return normalized.length ? normalized.slice(0, 3) : [{ metric: "marketCap", direction: "desc" }];
+}
+
+function compareKoreanScreenerMetric(a, b, metric, direction) {
+  const multiplier = direction === "asc" ? 1 : -1;
+
+  if (metric === "name") {
+    return a.name.localeCompare(b.name, "ko") * multiplier;
+  }
+
+  const aValue = a[metric];
+  const bValue = b[metric];
+  if (!Number.isFinite(aValue) && !Number.isFinite(bValue)) {
+    return 0;
+  }
+  if (!Number.isFinite(aValue)) {
+    return 1;
+  }
+  if (!Number.isFinite(bValue)) {
+    return -1;
+  }
+  return (aValue - bValue) * multiplier;
+}
+
+function sortKoreanScreenerItems(items, sorts) {
+  const normalizedSorts = normalizeScreenerSorts(sorts);
+  return [...items].sort((a, b) => {
+    for (const sort of normalizedSorts) {
+      const result = compareKoreanScreenerMetric(a, b, sort.metric, sort.direction);
+      if (result !== 0) {
+        return result;
+      }
+    }
+    return a.rank - b.rank;
+  });
+}
+
+async function enrichKoreanScreenerItem(item) {
+  const tradingValue =
+    Number.isFinite(item.price) && Number.isFinite(item.volume)
+      ? (item.price * item.volume) / 100000000
+      : null;
+  const cached = screenerDetailCache.get(item.code);
+
+  if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    return { ...item, tradingValue, ...cached.metrics };
+  }
+
+  try {
+    const response = await fetch(`${NAVER_ITEM_MAIN_URL}${item.code}`, {
+      headers: {
+        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      },
+    });
+
+    if (!response.ok) {
+      return { ...item, tradingValue };
+    }
+
+    const html = new TextDecoder("euc-kr").decode(new Uint8Array(await response.arrayBuffer()));
+    let pbr = parseNaverFundamentalRowValue(html, "PBR") ?? parseNaverSiseValue(html, "PBR");
+    let forwardPer = null;
+    let sales = parseNaverFundamentalRowValue(html, "매출액");
+    let operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
+    let equity = parseNaverFundamentalRowValue(html, "자본총계");
+    let roa = parseNaverFundamentalRowValue(html, "ROA\\(\\%\\)");
+    let eps = parseNaverFundamentalRowValue(html, "EPS\\(원\\)");
+    let reserveRatio =
+      parseNaverFundamentalRowValue(html, "유보율\\(\\%\\)") ??
+      parseNaverSiseValue(html, "유보율");
+
+    if (
+      !Number.isFinite(sales) ||
+      !Number.isFinite(operatingProfit) ||
+      !Number.isFinite(equity) ||
+      !Number.isFinite(forwardPer) ||
+      !Number.isFinite(pbr) ||
+      !Number.isFinite(roa) ||
+      !Number.isFinite(eps) ||
+      !Number.isFinite(reserveRatio)
+    ) {
+      const financialHtml = await fetchWiseReportFinancialSummaryHtml(item.code);
+      if (financialHtml) {
+        sales = Number.isFinite(sales) ? sales : parseNaverFundamentalRowValue(financialHtml, "매출액");
+        operatingProfit = Number.isFinite(operatingProfit)
+          ? operatingProfit
+          : parseNaverFundamentalRowValue(financialHtml, "영업이익");
+        equity = Number.isFinite(equity) ? equity : parseNaverFundamentalRowValue(financialHtml, "자본총계");
+        pbr = Number.isFinite(pbr) ? pbr : parseNaverFundamentalRowValue(financialHtml, "PBR");
+        forwardPer = Number.isFinite(forwardPer)
+          ? forwardPer
+          : parseWiseReportForwardAnnualValue(financialHtml, "PER");
+        roa = Number.isFinite(roa) ? roa : parseNaverFundamentalRowValue(financialHtml, "ROA");
+        eps = Number.isFinite(eps) ? eps : parseNaverFundamentalRowValue(financialHtml, "EPS");
+        reserveRatio = Number.isFinite(reserveRatio)
+          ? reserveRatio
+          : parseNaverFundamentalRowValue(financialHtml, "자본유보율");
+      }
+    }
+
+    const metrics = {
+      pbr: Number.isFinite(pbr) ? pbr : item.pbr,
+      forwardPer: Number.isFinite(forwardPer) ? forwardPer : item.forwardPer,
+      sales: Number.isFinite(sales) ? sales : item.sales,
+      operatingProfit: Number.isFinite(operatingProfit) ? operatingProfit : item.operatingProfit,
+      equity: Number.isFinite(equity) ? equity : item.equity,
+      roa: Number.isFinite(roa) ? roa : null,
+      reserveRatio: Number.isFinite(reserveRatio) ? reserveRatio : null,
+      eps: Number.isFinite(eps) ? eps : null,
+    };
+    screenerDetailCache.set(item.code, { cachedAt: Date.now(), metrics });
+
+    return {
+      ...item,
+      tradingValue,
+      ...metrics,
+    };
+  } catch {
+    return { ...item, tradingValue };
+  }
+}
+
+function addKoreanScreenerComputedMetrics(item) {
+  return {
+    ...item,
+    tradingValue:
+      Number.isFinite(item.price) && Number.isFinite(item.volume)
+        ? (item.price * item.volume) / 100000000
+        : null,
+  };
+}
+
+async function fetchAllKoreanMarketCapItems(sosok) {
+  const items = [];
+
+  for (let page = 1; page <= 80; page += 1) {
+    const pageItems = await fetchMarketCapPage(sosok, page);
+    if (!pageItems.length) {
+      break;
+    }
+    items.push(...pageItems);
+  }
+
+  return items.filter((item) => !isKoreanListedFundItem(item)).sort((a, b) => a.rank - b.rank);
+}
+
+async function getKoreanScreenerPayload(
+  marketId,
+  sorts = [{ metric: "marketCap", direction: "desc" }],
+  scope = "top100",
+  limit = 100,
+  forceRefresh = false,
+) {
+  const normalizedMarket = marketId === "kosdaq" ? "kosdaq" : "kospi";
+  const normalizedSorts = normalizeScreenerSorts(sorts);
+  const normalizedScope = scope === "all" ? "all" : "top100";
+  const normalizedLimit = Math.max(100, Math.min(500, Number(limit) || 100));
+  const needsDetailSort = normalizedSorts.some((sort) => KOREAN_SCREENER_DETAIL_METRICS.has(sort.metric));
+  const cacheKey = `screener:${normalizedMarket}:${normalizedScope}:${needsDetailSort ? "details" : "base"}`;
+  const cached = screenerCache.get(cacheKey);
+
+  let items;
+  if (!forceRefresh && cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
+    items = cached.items;
+  } else {
+    const sosok = normalizedMarket === "kosdaq" ? 1 : 0;
+    const baseItems =
+      normalizedScope === "all"
+        ? await fetchAllKoreanMarketCapItems(sosok)
+        : (await Promise.all(Array.from({ length: 6 }, (_, index) => fetchMarketCapPage(sosok, index + 1))))
+            .flat()
+            .sort((a, b) => a.rank - b.rank)
+            .filter((item) => !isKoreanListedFundItem(item))
+            .slice(0, 100);
+    const shouldFetchDetails =
+      needsDetailSort ||
+      normalizedSorts.some((sort) => KOREAN_SCREENER_DETAIL_METRICS.has(sort.metric));
+    items = shouldFetchDetails
+      ? await mapWithLimit(baseItems, KOR_FUNDAMENTAL_CONCURRENCY, enrichKoreanScreenerItem)
+      : baseItems.map(addKoreanScreenerComputedMetrics);
+    screenerCache.set(cacheKey, { cachedAt: Date.now(), items });
+  }
+
+  const config = markets[normalizedMarket];
+  const sortedBaseItems = sortKoreanScreenerItems(items, normalizedSorts).slice(
+    0,
+    normalizedScope === "top100" ? 100 : normalizedLimit,
+  );
+  const visibleItems = needsDetailSort
+    ? sortedBaseItems
+    : await mapWithLimit(sortedBaseItems, KOR_FUNDAMENTAL_CONCURRENCY, enrichKoreanScreenerItem);
+  const sortedItems = visibleItems.map((item, index) => ({
+      ...item,
+      market: normalizedMarket,
+      displayRank: index + 1,
+    }));
+
+  return {
+    ...config,
+    id: "screener",
+    label: "종목순위",
+    market: "종목순위",
+    title: `${normalizedMarket === "kosdaq" ? "KOSDAQ" : "KOSPI"} 전체 종목순위`,
+    eyebrow: "Korea Stock Screener",
+    sourceName: "Naver Finance",
+    sourceUrl: config.sourceUrl,
+    rankLabel: "시총 순위",
+    metricLabel: "시총 합계",
+    extraLabel: "시가총액(조)",
+    extraType: "marketCap",
+    screenerMarket: normalizedMarket,
+    screenerSorts: normalizedSorts,
+    screenerMetric: normalizedSorts[0].metric,
+    screenerDirection: normalizedSorts[0].direction,
+    screenerScope: normalizedScope,
+    screenerLimit: normalizedLimit,
+    count: sortedItems.length,
+    items: sortedItems,
+  };
 }
 
 async function fetchHtml(url) {
@@ -614,9 +957,11 @@ async function fetchStooqQuoteOnce(symbol) {
       ? parseNumeric(cells[7]).toLocaleString("en-US")
       : "",
     per: null,
+    forwardPer: null,
     roe: null,
     sales: null,
     operatingProfit: null,
+    equity: null,
     pbr: null,
     currency: "USD",
     detailUrl: `https://stooq.com/q/?s=${encodeURIComponent(stooqCode)}`,
@@ -681,7 +1026,9 @@ async function enrichUsMarket(contributors, marketId) {
     
     let sales = null;
     let operatingProfit = null;
-    let per = quote.trailingPE || quote.forwardPE || null;
+    let equity = null;
+    let per = quote.trailingPE || null;
+    let forwardPer = quote.forwardPE || null;
     let roe = null;
     let pbr = quote.priceToBook || null;
 
@@ -697,7 +1044,8 @@ async function enrichUsMarket(contributors, marketId) {
         roe = fd.returnOnEquity ? fd.returnOnEquity * 100 : null; // roe in percentage
       }
       if (ks) {
-        if (!per) per = ks.trailingPE || ks.forwardPE || null;
+        if (!per) per = ks.trailingPE || null;
+        if (!forwardPer) forwardPer = ks.forwardPE || null;
         if (!pbr) pbr = ks.priceToBook || null;
       }
     }
@@ -715,9 +1063,11 @@ async function enrichUsMarket(contributors, marketId) {
       volume,
       volumeText: Number.isFinite(volume) ? volume.toLocaleString("en-US") : "",
       per,
+      forwardPer,
       roe,
       sales,
       operatingProfit,
+      equity,
       pbr,
       currency: "USD",
       detailUrl: `https://finance.yahoo.com/quote/${item.code}`
@@ -800,4 +1150,5 @@ function getMarkets() {
 module.exports = {
   getMarketPayload,
   getMarkets,
+  getKoreanScreenerPayload,
 };
