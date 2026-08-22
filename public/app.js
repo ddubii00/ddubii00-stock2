@@ -641,7 +641,7 @@ function syncPeriodReturnHeaders() {
     th.textContent = period.label;
     fragment.appendChild(th);
   });
-  els.extraHeader.after(fragment);
+  els.tableHeaderRow.appendChild(fragment);
 }
 
 function periodReturnCells(stock) {
@@ -672,7 +672,6 @@ function renderRows(items) {
           </td>
           <td class="numeric ${movement}">${escapeHtml(formatChange(stock))}</td>
           ${extraCell(stock)}
-          ${periodReturnCells(stock)}
           <td class="numeric muted-value">${eokToJoNumber(stock.sales)}</td>
           <td class="numeric muted-value">${eokToJoNumber(stock.operatingProfit)}</td>
           <td class="numeric muted-value">${eokToJoNumber(stock.equity)}</td>
@@ -681,10 +680,11 @@ function renderRows(items) {
           <td class="numeric">${Number.isFinite(stock.roe) ? `${formatPlainNumber(stock.roe)}%` : "-"}</td>
           <td class="numeric muted-value">${formatUnavailableMetric(stock.pbr)}</td>
           <td class="numeric">${formatNumber(stock.volume)}</td>
-          <td class="numeric muted-value">${formatOptionalNumber(stock.tradingValue, 0)}</td>
+          <td class="numeric muted-value">${eokToJoNumber(stock.tradingValue)}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.roa, 2, "%")}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.reserveRatio, 2, "%")}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.eps, 0)}</td>
+          ${periodReturnCells(stock)}
         </tr>`;
     })
     .join("");

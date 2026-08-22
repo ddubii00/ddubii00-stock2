@@ -507,7 +507,7 @@ select:focus,
 
 table {
   --rank-col-width: 76px;
-  --name-col-width: 180px;
+  --name-col-width: 168px;
   width: 100%;
   min-width: 2450px;
   border-collapse: separate;

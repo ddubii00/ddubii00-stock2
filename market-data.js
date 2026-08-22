@@ -392,11 +392,20 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
             return item;
           }
 
-          const html = await response.text();
+          const html = new TextDecoder("euc-kr").decode(new Uint8Array(await response.arrayBuffer()));
+          const tradingValue =
+            Number.isFinite(item.price) && Number.isFinite(item.volume)
+              ? (item.price * item.volume) / 100000000
+              : null;
           const pbr = parseNaverFundamentalRowValue(html, "PBR") ?? parseNaverSiseValue(html, "PBR");
           let sales = parseNaverFundamentalRowValue(html, "매출액");
           let operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
           let equity = parseNaverFundamentalRowValue(html, "자본총계");
+          let roa = parseNaverFundamentalRowValue(html, "ROA\\(\\%\\)");
+          let eps = parseNaverFundamentalRowValue(html, "EPS\\(원\\)");
+          let reserveRatio =
+            parseNaverFundamentalRowValue(html, "유보율\\(\\%\\)") ??
+            parseNaverSiseValue(html, "유보율");
           let forwardPer = null;
           const financialHtml = await fetchWiseReportFinancialSummaryHtml(item.code);
           if (financialHtml) {
@@ -406,9 +415,15 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
               : parseNaverFundamentalRowValue(financialHtml, "영업이익");
             equity = Number.isFinite(equity) ? equity : parseNaverFundamentalRowValue(financialHtml, "자본총계");
             forwardPer = parseWiseReportForwardAnnualValue(financialHtml, "PER");
+            roa = Number.isFinite(roa) ? roa : parseNaverFundamentalRowValue(financialHtml, "ROA");
+            eps = Number.isFinite(eps) ? eps : parseNaverFundamentalRowValue(financialHtml, "EPS");
+            reserveRatio = Number.isFinite(reserveRatio)
+              ? reserveRatio
+              : parseNaverFundamentalRowValue(financialHtml, "자본유보율");
           }
           return {
             ...item,
+            tradingValue,
             pbr: Number.isFinite(pbr) ? pbr : item.pbr,
             sales: Number.isFinite(sales) ? sales : item.sales,
             operatingProfit: Number.isFinite(operatingProfit)
@@ -416,6 +431,9 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
               : item.operatingProfit,
             equity: Number.isFinite(equity) ? equity : item.equity,
             forwardPer: Number.isFinite(forwardPer) ? forwardPer : item.forwardPer,
+            roa: Number.isFinite(roa) ? roa : item.roa,
+            reserveRatio: Number.isFinite(reserveRatio) ? reserveRatio : item.reserveRatio,
+            eps: Number.isFinite(eps) ? eps : item.eps,
           };
         } catch {
           return item;
