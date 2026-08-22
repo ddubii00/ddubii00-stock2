@@ -58,6 +58,7 @@ const els = {
   rankHeader: document.querySelector("#rankHeader"),
   refreshButton: document.querySelector("#refreshButton"),
   rows: document.querySelector("#stockRows"),
+  tableHeaderRow: document.querySelector("table thead tr"),
   searchInput: document.querySelector("#searchInput"),
   searchSuggestions: document.querySelector("#searchSuggestions"),
   searchSuggestionMenu: document.querySelector("#searchSuggestionMenu"),
@@ -620,6 +621,34 @@ function periodReturnCell(stock, key) {
   `;
 }
 
+function showTopBoardPeriodReturns() {
+  return state.market === "kospi" || state.market === "kosdaq";
+}
+
+function syncPeriodReturnHeaders() {
+  if (!els.tableHeaderRow || !els.extraHeader) return;
+  els.tableHeaderRow
+    .querySelectorAll("[data-period-return-header]")
+    .forEach((header) => header.remove());
+
+  if (!showTopBoardPeriodReturns()) return;
+
+  const fragment = document.createDocumentFragment();
+  returnPeriods.forEach((period) => {
+    const th = document.createElement("th");
+    th.className = "numeric";
+    th.dataset.periodReturnHeader = period.key;
+    th.textContent = period.label;
+    fragment.appendChild(th);
+  });
+  els.extraHeader.after(fragment);
+}
+
+function periodReturnCells(stock) {
+  if (!showTopBoardPeriodReturns()) return "";
+  return returnPeriods.map((period) => periodReturnCell(stock, period.key)).join("");
+}
+
 function renderRows(items) {
   els.rows.innerHTML = items
     .map((stock) => {
@@ -643,6 +672,7 @@ function renderRows(items) {
           </td>
           <td class="numeric ${movement}">${escapeHtml(formatChange(stock))}</td>
           ${extraCell(stock)}
+          ${periodReturnCells(stock)}
           <td class="numeric muted-value">${eokToJoNumber(stock.sales)}</td>
           <td class="numeric muted-value">${eokToJoNumber(stock.operatingProfit)}</td>
           <td class="numeric muted-value">${eokToJoNumber(stock.equity)}</td>
@@ -1236,6 +1266,7 @@ function updateChrome() {
     state.meta.extraType === "marketCap" || state.meta.extraType === "marketCapUsd"
       ? "numeric"
       : "";
+  syncPeriodReturnHeaders();
   els.fourthMetricLabel.textContent = state.meta.metricLabel || "평균 거래량";
   if (els.screenerControls) {
     els.screenerControls.classList.toggle("is-visible", state.market === "screener");
