@@ -19,6 +19,7 @@ const cache = new Map();
 const screenerCache = new Map();
 const screenerDetailCache = new Map();
 const inflightFetches = new Map();
+let koreanSearchCache = { cachedAt: 0, items: [] };
 
 const markets = {
   kospi: {
@@ -644,6 +645,27 @@ async function fetchAllKoreanMarketCapItems(sosok) {
   return items.filter((item) => !isKoreanListedFundItem(item)).sort((a, b) => a.rank - b.rank);
 }
 
+async function getAllKoreanSearchItems(forceRefresh = false) {
+  if (
+    !forceRefresh &&
+    koreanSearchCache.items.length &&
+    Date.now() - koreanSearchCache.cachedAt < 1000 * 60 * 60 * 6
+  ) {
+    return koreanSearchCache.items;
+  }
+
+  const [kospiItems, kosdaqItems] = await Promise.all([
+    fetchAllKoreanMarketCapItems(0),
+    fetchAllKoreanMarketCapItems(1),
+  ]);
+  const items = [
+    ...kospiItems.map((item) => ({ name: item.name, code: item.code, market: "kospi" })),
+    ...kosdaqItems.map((item) => ({ name: item.name, code: item.code, market: "kosdaq" })),
+  ];
+  koreanSearchCache = { cachedAt: Date.now(), items };
+  return items;
+}
+
 async function getKoreanScreenerPayload(
   marketId,
   sorts = [{ metric: "marketCap", direction: "desc" }],
@@ -1169,4 +1191,5 @@ module.exports = {
   getMarketPayload,
   getMarkets,
   getKoreanScreenerPayload,
+  getAllKoreanSearchItems,
 };

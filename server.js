@@ -1,7 +1,12 @@
 const http = require("node:http");
 const { readFile } = require("node:fs/promises");
 const path = require("node:path");
-const { getKoreanScreenerPayload, getMarketPayload, getMarkets } = require("./market-data");
+const {
+  getAllKoreanSearchItems,
+  getKoreanScreenerPayload,
+  getMarketPayload,
+  getMarkets,
+} = require("./market-data");
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 5173);
@@ -23,6 +28,7 @@ const periodReturnDefs = [
   { key: "d1", label: "당일", periods: 1 },
   { key: "d3", label: "3일", periods: 3 },
   { key: "d5", label: "5일", periods: 5 },
+  { key: "d10", label: "10일", periods: 10 },
   { key: "d20", label: "20일", periods: 20 },
   { key: "d60", label: "60일", periods: 60 },
   { key: "d120", label: "120일", periods: 120 },
@@ -69,52 +75,57 @@ async function loadKrxSearchList() {
   if (now - krxSearchCache.loadedAt < 1000 * 60 * 60 * 6 && krxSearchCache.items.length) {
     return krxSearchCache.items;
   }
-  const response = await fetch(
-    "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13",
-    {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-        "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+  try {
+    const response = await fetch(
+      "https://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13",
+      {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+          "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
+        },
       },
-    },
-  );
-  if (!response.ok) {
-    throw new Error(`KRX list responded with ${response.status}`);
-  }
-  const html = decodeEucKr(new Uint8Array(await response.arrayBuffer()));
-  const rows = [...html.matchAll(/<tr>([\s\S]*?)<\/tr>/g)];
-  const items = [];
-  for (const row of rows) {
-    const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) =>
-      m[1].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
     );
-    if (cells.length < 3) continue;
-    const name = cells[0];
-    const marketType = String(cells[1] || "").trim();
-    const rawCode = String(cells[2] || "").trim();
-    const digits = rawCode.replace(/\D/g, "");
-    if (!name || digits.length !== 6) continue;
-    const code = digits;
-    items.push({ name, code, marketType });
+    if (!response.ok) {
+      throw new Error(`KRX list responded with ${response.status}`);
+    }
+    const html = decodeEucKr(new Uint8Array(await response.arrayBuffer()));
+    const rows = [...html.matchAll(/<tr>([\s\S]*?)<\/tr>/g)];
+    const items = [];
+    for (const row of rows) {
+      const cells = [...row[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map((m) =>
+        m[1].replace(/<[^>]+>/g, "").replace(/&nbsp;/g, " ").trim(),
+      );
+      if (cells.length < 3) continue;
+      const name = cells[0];
+      const marketType = String(cells[1] || "").trim();
+      const rawCode = String(cells[2] || "").trim();
+      const digits = rawCode.replace(/\D/g, "");
+      if (!name || digits.length !== 6) continue;
+      const market = marketType === "코스닥" ? "kosdaq" : marketType === "유가" ? "kospi" : "";
+      if (!market) continue;
+      items.push({ name, code: digits, market });
+    }
+    krxSearchCache = { loadedAt: now, items };
+    return items;
+  } catch {
+    const items = await getAllKoreanSearchItems();
+    krxSearchCache = { loadedAt: now, items };
+    return items;
   }
-  krxSearchCache = { loadedAt: now, items };
-  return items;
 }
 
 async function searchSymbols(marketId, query) {
   const q = query.trim().toLowerCase();
   if (!q) return [];
-  const isKorean = marketId === "kospi" || marketId === "kosdaq";
+  const isKorean = marketId === "kospi" || marketId === "kosdaq" || marketId === "all";
   if (isKorean) {
     const list = await loadKrxSearchList();
     return list
-      .filter((x) =>
-        marketId === "kospi" ? x.marketType === "유가" : marketId === "kosdaq" ? x.marketType === "코스닥" : true,
-      )
+      .filter((x) => marketId === "all" || x.market === marketId)
       .filter((x) => x.name.toLowerCase().includes(q) || x.code.includes(q))
       .slice(0, 20)
-      .map((x) => ({ ...x, market: marketId }));
+      .map((x) => ({ name: x.name, code: x.code, market: x.market }));
   }
   const payload = await getMarketPayload(marketId);
   return payload.items

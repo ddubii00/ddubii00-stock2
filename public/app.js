@@ -111,6 +111,11 @@ const returnPeriods = [
   { key: "d60", label: "60일", periods: 60 },
   { key: "d120", label: "120일", periods: 120 },
 ];
+const relativeStrengthPeriods = [
+  { key: "d10", label: "RS 10일" },
+  { key: "d20", label: "RS 20일" },
+  { key: "d60", label: "RS 60일" },
+];
 const relativeWarningThreshold = -5;
 let requestSerial = 0;
 let chartRuntime = null;
@@ -188,10 +193,8 @@ async function loadSearchSuggestions(query) {
     return;
   }
   try {
-    const params = new URLSearchParams({
-      market: state.market === "screener" ? state.screenerMarket : state.market,
-      q: query.trim(),
-    });
+    const koreanMarket = state.market === "kospi" || state.market === "kosdaq" || state.market === "screener";
+    const params = new URLSearchParams({ market: koreanMarket ? "all" : state.market, q: query.trim() });
     const response = await fetch(`/api/search?${params.toString()}`);
     const payload = await response.json();
     if (!response.ok) return;
@@ -628,7 +631,7 @@ function showTopBoardPeriodReturns() {
 function syncPeriodReturnHeaders() {
   if (!els.tableHeaderRow || !els.extraHeader) return;
   els.tableHeaderRow
-    .querySelectorAll("[data-period-return-header]")
+    .querySelectorAll("[data-period-return-header], [data-relative-strength-header]")
     .forEach((header) => header.remove());
 
   if (!showTopBoardPeriodReturns()) return;
@@ -641,12 +644,32 @@ function syncPeriodReturnHeaders() {
     th.textContent = period.label;
     fragment.appendChild(th);
   });
+  relativeStrengthPeriods.forEach((period) => {
+    const th = document.createElement("th");
+    th.className = "numeric";
+    th.dataset.relativeStrengthHeader = period.key;
+    th.textContent = period.label;
+    fragment.appendChild(th);
+  });
   els.tableHeaderRow.appendChild(fragment);
 }
 
 function periodReturnCells(stock) {
   if (!showTopBoardPeriodReturns()) return "";
   return returnPeriods.map((period) => periodReturnCell(stock, period.key)).join("");
+}
+
+function relativeStrengthCells(stock) {
+  if (!showTopBoardPeriodReturns()) return "";
+  return relativeStrengthPeriods
+    .map((period) => {
+      const item = (stock.periodReturns || []).find((entry) => entry.key === period.key);
+      const value = item?.relative;
+      return `<td class="numeric relative-strength-cell ${returnClass(value)}" title="${escapeHtml(
+        item?.benchmarkLabel || "지수",
+      )} 대비 상대수익률">${formatReturnValue(value)}</td>`;
+    })
+    .join("");
 }
 
 function renderRows(items) {
@@ -685,6 +708,7 @@ function renderRows(items) {
           <td class="numeric muted-value">${formatOptionalNumber(stock.reserveRatio, 2, "%")}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.eps, 0)}</td>
           ${periodReturnCells(stock)}
+          ${relativeStrengthCells(stock)}
         </tr>`;
     })
     .join("");

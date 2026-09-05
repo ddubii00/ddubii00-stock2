@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Market Top Boards</title>
-    <link rel="stylesheet" href="/styles.css?v=20260822b" />
+    <link rel="stylesheet" href="/styles.css?v=20260905a" />
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="/app.js?v=20260822b" defer></script>
+    <script src="/app.js?v=20260905a" defer></script>
   </head>
   <body>
     <header class="app-header">
@@ -123,6 +123,21 @@
           <span id="fourthMetricLabel">시총 합계</span>
           <strong id="totalMarketCap">0조</strong>
         </article>
+      </section>
+
+      <section class="controls stock-search-controls" aria-label="전체 종목 검색">
+        <label class="search-box">
+          <span>전체 종목 검색</span>
+          <input
+            id="searchInput"
+            type="search"
+            placeholder="KOSPI·KOSDAQ 종목명 또는 코드"
+            list="searchSuggestions"
+            autocomplete="off"
+          />
+          <datalist id="searchSuggestions"></datalist>
+          <div id="searchSuggestionMenu" class="search-suggestion-menu"></div>
+        </label>
       </section>
 
       <section class="table-wrap" aria-label="KOSPI 시가총액 상위 100개 종목">
