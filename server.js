@@ -688,6 +688,10 @@ async function handleStatic(req, res, url) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
+  const subpathMatch = url.pathname.match(/^\/stock2-\d+(?=\/|$)/);
+  if (subpathMatch) {
+    url.pathname = url.pathname.slice(subpathMatch[0].length) || "/";
+  }
 
   if (url.pathname.startsWith("/api/")) {
     await handleApi(req, res, url);

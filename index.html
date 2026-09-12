@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Market Top Boards</title>
-    <link rel="stylesheet" href="/styles.css?v=20260529_3" />
+    <link rel="stylesheet" href="./styles.css?v=20260912a" />
     <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
-    <script src="/app.js?v=20260529_3" defer></script>
+    <script src="./app.js?v=20260912a" defer></script>
   </head>
   <body>
     <header class="app-header">
@@ -33,6 +33,9 @@
         <button class="market-tab" type="button" data-market="dow">
           Dow
         </button>
+        <button class="market-tab" type="button" data-market="screener">
+          종목순위
+        </button>
       </nav>
 
       <section class="status-band" aria-live="polite">
@@ -50,6 +53,59 @@
         </div>
       </section>
 
+      <section class="screener-controls" id="screenerControls" aria-label="종목순위 조건">
+        <label>
+          <span>시장</span>
+          <select id="screenerMarketSelect">
+            <option value="kospi">KOSPI</option>
+            <option value="kosdaq">KOSDAQ</option>
+          </select>
+        </label>
+        <label>
+          <span>범위</span>
+          <select id="screenerScopeSelect">
+            <option value="top100">시총100</option>
+            <option value="all">전체</option>
+          </select>
+        </label>
+        <label>
+          <span>표시 개수</span>
+          <select id="screenerLimitSelect">
+            <option value="100">100개</option>
+            <option value="200">200개</option>
+            <option value="300">300개</option>
+            <option value="400">400개</option>
+            <option value="500">500개</option>
+          </select>
+        </label>
+        <label>
+          <span>정렬기준</span>
+          <select id="screenerSort1Select">
+            <option value="marketCap">시가총액</option>
+            <option value="rank">시총순위</option>
+            <option value="changeRate">등락률</option>
+            <option value="volume">거래량</option>
+            <option value="tradingValue">거래액</option>
+            <option value="equity">자기자본</option>
+            <option value="per">PER</option>
+            <option value="forwardPer">Forward PER</option>
+            <option value="roe">ROE</option>
+            <option value="pbr">PBR</option>
+            <option value="roa">ROA</option>
+            <option value="reserveRatio">유보율</option>
+            <option value="eps">EPS</option>
+          </select>
+        </label>
+        <label>
+          <span>방향</span>
+          <select id="screenerDirection1Select">
+            <option value="desc">내림차순</option>
+            <option value="asc">오름차순</option>
+          </select>
+        </label>
+        <button type="button" id="applyScreenerButton">적용</button>
+      </section>
+
       <section class="metrics" aria-label="시장 요약">
         <article>
           <span>상승</span>
@@ -60,7 +116,7 @@
           <strong class="down" id="downCount">0</strong>
         </article>
         <article>
-          <span>지수 등락률</span>
+          <span>평균 등락률</span>
           <strong id="avgRate">0.00%</strong>
         </article>
         <article>
@@ -69,32 +125,18 @@
         </article>
       </section>
 
-      <section class="controls" aria-label="목록 제어">
+      <section class="controls stock-search-controls" aria-label="전체 종목 검색">
         <label class="search-box">
-          <span>검색</span>
-          <input id="searchInput" type="search" placeholder="종목명 또는 코드" list="searchSuggestions" />
+          <span>전체 종목 검색</span>
+          <input
+            id="searchInput"
+            type="search"
+            placeholder="KOSPI·KOSDAQ 종목명 또는 코드"
+            list="searchSuggestions"
+            autocomplete="off"
+          />
           <datalist id="searchSuggestions"></datalist>
           <div id="searchSuggestionMenu" class="search-suggestion-menu"></div>
-        </label>
-        <label>
-          <span>등락</span>
-          <select id="directionFilter">
-            <option value="all">전체</option>
-            <option value="up">상승</option>
-            <option value="down">하락</option>
-            <option value="flat">보합</option>
-          </select>
-        </label>
-        <label>
-          <span>정렬</span>
-          <select id="sortSelect">
-            <option value="rank">시총 순위</option>
-            <option value="changeRate">등락률</option>
-            <option value="price">현재가</option>
-            <option value="marketCap">시가총액</option>
-            <option value="volume">거래량</option>
-            <option value="name">종목명</option>
-          </select>
         </label>
       </section>
 
@@ -105,16 +147,22 @@
             <tr>
               <th id="rankHeader">시총 순위</th>
               <th>종목</th>
-              <th class="numeric">현재가</th>
+              <th class="numeric" id="priceHeader">주가(원)</th>
               <th class="numeric">등락률</th>
               <th class="numeric">전일비</th>
               <th class="numeric" id="extraHeader">시가총액(조)</th>
               <th class="numeric">매출(조)</th>
               <th class="numeric">영업이익(조)</th>
+              <th class="numeric">자기자본(조)</th>
               <th class="numeric">PER</th>
+              <th class="numeric">Forward PER</th>
               <th class="numeric">ROE</th>
-              <th class="numeric" id="pbrHeader">PBR</th>
-              <th class="numeric" id="volumeHeader">거래량</th>
+              <th class="numeric">PBR</th>
+              <th class="numeric">거래량</th>
+              <th class="numeric">거래액(조)</th>
+              <th class="numeric">ROA</th>
+              <th class="numeric">유보율</th>
+              <th class="numeric">EPS</th>
             </tr>
           </thead>
           <tbody id="stockRows"></tbody>
@@ -138,6 +186,7 @@
             <button type="button" id="applyDaysButton">적용</button>
             <button type="button" id="closeChartButton">닫기</button>
           </header>
+          <div id="chartReturnSummary" class="chart-return-summary"></div>
           <div class="chart-stack">
             <div id="priceLegend" class="chart-legend"></div>
             <div id="priceChart" class="chart-box chart-price"></div>
