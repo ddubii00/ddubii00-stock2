@@ -1,7 +1,8 @@
 const YahooFinance = require('yahoo-finance2').default;
 const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
 
-const NAVER_MARKET_SUM_URL = "https://finance.naver.com/sise/sise_market_sum.naver";
+const NAVER_STOCK_LIST_API_URL =
+  "https://stock.naver.com/api/stockSecurity/individual-stocks/v3/domestic";
 const WIKI_NASDAQ_100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100";
 const WIKI_DOW_URL = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average";
 const MARKETCAP_NASDAQ_100_URL =
@@ -28,7 +29,7 @@ const markets = {
     title: "오늘 KOSPI 시가총액 Top 100",
     eyebrow: "Korea Market Cap",
     sourceName: "Naver Finance",
-    sourceUrl: "https://finance.naver.com/sise/sise_market_sum.naver?sosok=0",
+    sourceUrl: "https://stock.naver.com/market/stock/kr/stocklist/capitalization",
     timezone: "Asia/Seoul",
     rankLabel: "시총 순위",
     extraLabel: "시가총액(억)",
@@ -42,7 +43,7 @@ const markets = {
     title: "오늘 KOSDAQ 시가총액 Top 50",
     eyebrow: "Korea Growth Market",
     sourceName: "Naver Finance",
-    sourceUrl: "https://finance.naver.com/sise/sise_market_sum.naver?sosok=1",
+    sourceUrl: "https://stock.naver.com/market/stock/kr/stocklist/capitalization",
     timezone: "Asia/Seoul",
     rankLabel: "시총 순위",
     extraLabel: "시가총액(억)",
@@ -208,6 +209,27 @@ function parseWiseReportForwardAnnualValue(html, rowTitle) {
   return values.length >= 5 ? values[4] : values[values.length - 1];
 }
 
+function calculatePeg(per, epsValues) {
+  if (!Number.isFinite(per) || epsValues.length < 2) {
+    return null;
+  }
+
+  for (let index = epsValues.length - 1; index > 0; index -= 1) {
+    const current = epsValues[index];
+    const previous = epsValues[index - 1];
+    if (!Number.isFinite(current) || !Number.isFinite(previous) || previous === 0) {
+      continue;
+    }
+
+    const growthRate = ((current - previous) / Math.abs(previous)) * 100;
+    if (growthRate > 0) {
+      return per / growthRate;
+    }
+  }
+
+  return null;
+}
+
 function parseNaverSiseValue(html, label) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const patterns = [
@@ -261,86 +283,80 @@ function sleep(ms) {
   });
 }
 
-function signedRate(rateText, direction) {
-  const absolute = parseNumeric(rateText);
-  if (absolute === null) {
-    return null;
+function naverPriceDirection(movement) {
+  if (movement === "rising") {
+    return "상승";
   }
-
-  if (String(rateText).includes("-") || direction === "하락") {
-    return -Math.abs(absolute);
+  if (movement === "falling") {
+    return "하락";
   }
-
-  if (String(rateText).includes("+") || direction === "상승") {
-    return Math.abs(absolute);
-  }
-
-  return 0;
+  return "보합";
 }
 
-function parseMarketCapPage(html) {
-  const rows = [];
-  const rowRegex =
-    /<tr[^>]*onMouseOver=["']mouseOver\(this\)["'][^>]*>([\s\S]*?)<\/tr>/gi;
+function parseNaverStockListItem(item, rank) {
+  const quote = item.krx || {};
+  const price = parseNumeric(quote.currentPrice);
+  const change = parseNumeric(quote.changePrice);
+  const changeRate = parseNumeric(quote.changeRate);
+  const marketCapWon = parseNumeric(quote.marketCap);
+  const listedStockCount = parseNumeric(item.listedStockCount);
+  const tradingValueWon = parseNumeric(quote.tradingValue);
+  const totalAssets = parseNumeric(item.totalAssets);
+  const totalLiabilities = parseNumeric(item.totalLiabilities);
+  const equityWon =
+    Number.isFinite(totalAssets) && Number.isFinite(totalLiabilities)
+      ? totalAssets - totalLiabilities
+      : null;
 
-  for (const rowMatch of html.matchAll(rowRegex)) {
-    const row = rowMatch[1];
-    const rankMatch = /<td[^>]*class=["']no["'][^>]*>(\d+)<\/td>/i.exec(row);
-    const nameMatch =
-      /<a\s+href=["']\/item\/main\.naver\?code=([a-zA-Z0-9]+)["']\s+class=["']tltle["'][^>]*>([\s\S]*?)<\/a>/i.exec(
-        row,
-      );
-
-    if (!rankMatch || !nameMatch) {
-      continue;
-    }
-
-    const numberCells = [...row.matchAll(/<td[^>]*class=["']number["'][^>]*>([\s\S]*?)<\/td>/gi)].map(
-      (match) => cleanText(match[1]),
-    );
-    const direction =
-      cleanText(row.match(/<span[^>]*class=["']blind["'][^>]*>([\s\S]*?)<\/span>/i)?.[1] || "") ||
-      (numberCells[2]?.includes("-") ? "하락" : numberCells[2]?.includes("+") ? "상승" : "보합");
-    const code = nameMatch[1];
-
-    rows.push({
-      rank: Number(rankMatch[1]),
-      code,
-      name: cleanText(nameMatch[2]),
-      price: parseNumeric(numberCells[0]),
-      priceText: numberCells[0] || "",
-      change: parseNumeric(numberCells[1]),
-      changeText: numberCells[1] || "",
-      changeDirection: direction,
-      changeRate: signedRate(numberCells[2], direction),
-      changeRateText: numberCells[2] || "",
-      parValue: parseNumeric(numberCells[3]),
-      marketCap: parseNumeric(numberCells[4]),
-      marketCapText: numberCells[4] || "",
-      listedShares: parseNumeric(numberCells[5]),
-      foreignRatio: parseNumeric(numberCells[6]),
-      volume: parseNumeric(numberCells[7]),
-      volumeText: numberCells[7] || "",
-      per: parseNumeric(numberCells[8]),
-      roe: parseNumeric(numberCells[9]),
-      forwardPer: null,
-      sales: null,
-      operatingProfit: null,
-      equity: null,
-      pbr: null,
-      detailUrl: `https://finance.naver.com/item/main.naver?code=${code}`,
-    });
-  }
-
-  return rows;
+  return {
+    rank,
+    code: item.itemCode,
+    name: item.itemName,
+    price,
+    priceText: Number.isFinite(price) ? price.toLocaleString("ko-KR") : "",
+    change,
+    changeText: Number.isFinite(change) ? change.toLocaleString("ko-KR") : "",
+    changeDirection: naverPriceDirection(quote.priceMovement),
+    changeRate,
+    changeRateText: Number.isFinite(changeRate)
+      ? `${changeRate > 0 ? "+" : ""}${changeRate.toFixed(2)}%`
+      : "",
+    parValue: null,
+    marketCap: Number.isFinite(marketCapWon) ? marketCapWon / 100000000 : null,
+    marketCapText: Number.isFinite(marketCapWon)
+      ? Math.round(marketCapWon / 100000000).toLocaleString("ko-KR")
+      : "",
+    listedShares: Number.isFinite(listedStockCount) ? listedStockCount / 1000 : null,
+    foreignRatio: parseNumeric(item.foreignHoldRatio),
+    volume: parseNumeric(quote.tradingVolume),
+    volumeText: quote.tradingVolume || "",
+    per: parseNumeric(item.per),
+    roe: parseNumeric(item.roe),
+    forwardPer: null,
+    peg: null,
+    sales: Number.isFinite(parseNumeric(item.sales)) ? parseNumeric(item.sales) / 100000000 : null,
+    operatingProfit: Number.isFinite(parseNumeric(item.operatingProfit))
+      ? parseNumeric(item.operatingProfit) / 100000000
+      : null,
+    equity: Number.isFinite(equityWon) ? equityWon / 100000000 : null,
+    pbr: parseNumeric(item.pbr),
+    roa: parseNumeric(item.roa),
+    reserveRatio: parseNumeric(item.reserveRatio),
+    eps: parseNumeric(item.eps),
+    tradingValue: Number.isFinite(tradingValueWon) ? tradingValueWon / 100000000 : null,
+    detailUrl: `https://finance.naver.com/item/main.naver?code=${item.itemCode}`,
+  };
 }
 
 async function fetchMarketCapPage(sosok, page) {
   const params = new URLSearchParams({
-    page: String(page),
-    sosok: String(sosok),
+    listingType: "marketCapDesc",
+    exchangeType: "krx",
+    marketType: sosok === 1 ? "KOSDAQ" : "KOSPI",
+    index: String(Math.max(0, page - 1)),
+    size: "50",
   });
-  const response = await fetch(`${NAVER_MARKET_SUM_URL}?${params.toString()}`, {
+  const response = await fetch(`${NAVER_STOCK_LIST_API_URL}?${params.toString()}`, {
     headers: {
       "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
       "User-Agent":
@@ -349,12 +365,14 @@ async function fetchMarketCapPage(sosok, page) {
   });
 
   if (!response.ok) {
-    throw new Error(`Naver Finance responded with ${response.status}`);
+    throw new Error(`Naver stock list API responded with ${response.status}`);
   }
 
-  const buffer = await response.arrayBuffer();
-  const html = new TextDecoder("euc-kr").decode(buffer);
-  return parseMarketCapPage(html);
+  const payload = await response.json();
+  const rankOffset = Math.max(0, (page - 1) * 50);
+  return (Array.isArray(payload.items) ? payload.items : []).map((item, index) =>
+    parseNaverStockListItem(item, rankOffset + index + 1),
+  );
 }
 
 async function getKospiTop100(forceRefresh = false) {
@@ -395,9 +413,10 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
 
           const html = new TextDecoder("euc-kr").decode(new Uint8Array(await response.arrayBuffer()));
           const tradingValue =
-            Number.isFinite(item.price) && Number.isFinite(item.volume)
+            item.tradingValue ??
+            (Number.isFinite(item.price) && Number.isFinite(item.volume)
               ? (item.price * item.volume) / 100000000
-              : null;
+              : null);
           const pbr = parseNaverFundamentalRowValue(html, "PBR") ?? parseNaverSiseValue(html, "PBR");
           let sales = parseNaverFundamentalRowValue(html, "매출액");
           let operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
@@ -408,6 +427,7 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
             parseNaverFundamentalRowValue(html, "유보율\\(\\%\\)") ??
             parseNaverSiseValue(html, "유보율");
           let forwardPer = null;
+          let peg = null;
           const financialHtml = await fetchWiseReportFinancialSummaryHtml(item.code);
           if (financialHtml) {
             sales = Number.isFinite(sales) ? sales : parseNaverFundamentalRowValue(financialHtml, "매출액");
@@ -416,6 +436,9 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
               : parseNaverFundamentalRowValue(financialHtml, "영업이익");
             equity = Number.isFinite(equity) ? equity : parseNaverFundamentalRowValue(financialHtml, "자본총계");
             forwardPer = parseWiseReportForwardAnnualValue(financialHtml, "PER");
+            peg =
+              parseNaverFundamentalRowValue(financialHtml, "PEG") ??
+              calculatePeg(forwardPer ?? item.per, parseNaverFundamentalRowValues(financialHtml, "EPS"));
             roa = Number.isFinite(roa) ? roa : parseNaverFundamentalRowValue(financialHtml, "ROA");
             eps = Number.isFinite(eps) ? eps : parseNaverFundamentalRowValue(financialHtml, "EPS");
             reserveRatio = Number.isFinite(reserveRatio)
@@ -432,6 +455,7 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
               : item.operatingProfit,
             equity: Number.isFinite(equity) ? equity : item.equity,
             forwardPer: Number.isFinite(forwardPer) ? forwardPer : item.forwardPer,
+            peg: Number.isFinite(peg) ? peg : item.peg,
             roa: Number.isFinite(roa) ? roa : item.roa,
             reserveRatio: Number.isFinite(reserveRatio) ? reserveRatio : item.reserveRatio,
             eps: Number.isFinite(eps) ? eps : item.eps,
@@ -460,6 +484,7 @@ const KOREAN_SCREENER_METRICS = new Set([
   "tradingValue",
   "per",
   "forwardPer",
+  "peg",
   "equity",
   "roe",
   "pbr",
@@ -473,6 +498,7 @@ const KOREAN_SCREENER_DETAIL_METRICS = new Set([
   "operatingProfit",
   "equity",
   "forwardPer",
+  "peg",
   "pbr",
   "roa",
   "reserveRatio",
@@ -536,9 +562,10 @@ function sortKoreanScreenerItems(items, sorts) {
 
 async function enrichKoreanScreenerItem(item) {
   const tradingValue =
-    Number.isFinite(item.price) && Number.isFinite(item.volume)
+    item.tradingValue ??
+    (Number.isFinite(item.price) && Number.isFinite(item.volume)
       ? (item.price * item.volume) / 100000000
-      : null;
+      : null);
   const cached = screenerDetailCache.get(item.code);
 
   if (cached && Date.now() - cached.cachedAt < CACHE_TTL_MS) {
@@ -561,6 +588,7 @@ async function enrichKoreanScreenerItem(item) {
     const html = new TextDecoder("euc-kr").decode(new Uint8Array(await response.arrayBuffer()));
     let pbr = parseNaverFundamentalRowValue(html, "PBR") ?? parseNaverSiseValue(html, "PBR");
     let forwardPer = null;
+    let peg = item.peg;
     let sales = parseNaverFundamentalRowValue(html, "매출액");
     let operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
     let equity = parseNaverFundamentalRowValue(html, "자본총계");
@@ -591,6 +619,11 @@ async function enrichKoreanScreenerItem(item) {
         forwardPer = Number.isFinite(forwardPer)
           ? forwardPer
           : parseWiseReportForwardAnnualValue(financialHtml, "PER");
+        peg =
+          Number.isFinite(peg)
+            ? peg
+            : parseNaverFundamentalRowValue(financialHtml, "PEG") ??
+              calculatePeg(forwardPer ?? item.per, parseNaverFundamentalRowValues(financialHtml, "EPS"));
         roa = Number.isFinite(roa) ? roa : parseNaverFundamentalRowValue(financialHtml, "ROA");
         eps = Number.isFinite(eps) ? eps : parseNaverFundamentalRowValue(financialHtml, "EPS");
         reserveRatio = Number.isFinite(reserveRatio)
@@ -602,6 +635,7 @@ async function enrichKoreanScreenerItem(item) {
     const metrics = {
       pbr: Number.isFinite(pbr) ? pbr : item.pbr,
       forwardPer: Number.isFinite(forwardPer) ? forwardPer : item.forwardPer,
+      peg: Number.isFinite(peg) ? peg : item.peg,
       sales: Number.isFinite(sales) ? sales : item.sales,
       operatingProfit: Number.isFinite(operatingProfit) ? operatingProfit : item.operatingProfit,
       equity: Number.isFinite(equity) ? equity : item.equity,
@@ -625,9 +659,10 @@ function addKoreanScreenerComputedMetrics(item) {
   return {
     ...item,
     tradingValue:
-      Number.isFinite(item.price) && Number.isFinite(item.volume)
+      item.tradingValue ??
+      (Number.isFinite(item.price) && Number.isFinite(item.volume)
         ? (item.price * item.volume) / 100000000
-        : null,
+        : null),
   };
 }
 
@@ -1071,6 +1106,7 @@ async function enrichUsMarket(contributors, marketId) {
     let forwardPer = quote.forwardPE || null;
     let roe = null;
     let pbr = quote.priceToBook || null;
+    let peg = null;
 
     const cachedFund = fundamentalCache.get(item.code);
     if (cachedFund && cachedFund.data) {
@@ -1087,6 +1123,7 @@ async function enrichUsMarket(contributors, marketId) {
         if (!per) per = ks.trailingPE || null;
         if (!forwardPer) forwardPer = ks.forwardPE || null;
         if (!pbr) pbr = ks.priceToBook || null;
+        peg = ks.pegRatio || null;
       }
     }
 
@@ -1104,6 +1141,7 @@ async function enrichUsMarket(contributors, marketId) {
       volumeText: Number.isFinite(volume) ? volume.toLocaleString("en-US") : "",
       per,
       forwardPer,
+      peg,
       roe,
       sales,
       operatingProfit,
