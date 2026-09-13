@@ -425,6 +425,19 @@ function eokToJoNumber(value) {
   return jo >= 10 ? numberFormatter.format(Math.round(jo)) : rateFormatter.format(jo);
 }
 
+function financialToJoNumber(stock, value) {
+  if (!Number.isFinite(value)) {
+    return "N/A";
+  }
+
+  if (stock.currency === "USD") {
+    const trillion = value / 1_000_000_000_000;
+    return trillion >= 10 ? numberFormatter.format(Math.round(trillion)) : rateFormatter.format(trillion);
+  }
+
+  return eokToJoNumber(value);
+}
+
 function formatUsdMarketCap(value) {
   if (!Number.isFinite(value)) {
     return "-";
@@ -702,16 +715,16 @@ function renderRows(items) {
           </td>
           <td class="numeric ${movement}">${escapeHtml(formatChange(stock))}</td>
           ${extraCell(stock)}
-          <td class="numeric muted-value">${eokToJoNumber(stock.sales)}</td>
-          <td class="numeric muted-value">${eokToJoNumber(stock.operatingProfit)}</td>
-          <td class="numeric muted-value">${eokToJoNumber(stock.equity)}</td>
+          <td class="numeric muted-value">${financialToJoNumber(stock, stock.sales)}</td>
+          <td class="numeric muted-value">${financialToJoNumber(stock, stock.operatingProfit)}</td>
+          <td class="numeric muted-value">${financialToJoNumber(stock, stock.equity)}</td>
           <td class="numeric">${formatPlainNumber(stock.per)}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.forwardPer, 2)}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.peg, 2)}</td>
           <td class="numeric">${Number.isFinite(stock.roe) ? `${formatPlainNumber(stock.roe)}%` : "-"}</td>
           <td class="numeric muted-value">${formatUnavailableMetric(stock.pbr)}</td>
           <td class="numeric">${formatNumber(stock.volume)}</td>
-          <td class="numeric muted-value">${eokToJoNumber(stock.tradingValue)}</td>
+          <td class="numeric muted-value">${financialToJoNumber(stock, stock.tradingValue)}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.roa, 2, "%")}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.reserveRatio, 2, "%")}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.eps, 0)}</td>

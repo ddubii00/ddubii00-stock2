@@ -1079,10 +1079,17 @@ async function enrichUsMarket(contributors, marketId) {
     if (uncached.length > 0) {
       await Promise.all(uncached.map(async (code) => {
         try {
-          const qs = await yahooFinance.quoteSummary(code, { modules: ['financialData', 'defaultKeyStatistics'] });
+          const [qs, balanceSheet] = await Promise.all([
+            yahooFinance.quoteSummary(code, { modules: ['financialData', 'defaultKeyStatistics'] }),
+            yahooFinance.fundamentalsTimeSeries(code, {
+              period1: '2024-01-01',
+              type: 'annual',
+              module: 'balance-sheet',
+            }),
+          ]);
           fundamentalCache.set(code, {
             timestamp: Date.now(),
-            data: qs
+            data: { ...qs, balanceSheet },
           });
         } catch (error) {
           console.error(`Failed to fetch fundamental for ${code}:`, error.message);
@@ -1106,24 +1113,32 @@ async function enrichUsMarket(contributors, marketId) {
     let forwardPer = quote.forwardPE || null;
     let roe = null;
     let pbr = quote.priceToBook || null;
-    let peg = null;
+    let peg = quote.pegRatio || null;
+    let roa = null;
+    let tradingValue = Number.isFinite(price) && Number.isFinite(volume) ? price * volume : null;
 
     const cachedFund = fundamentalCache.get(item.code);
     if (cachedFund && cachedFund.data) {
       const fd = cachedFund.data.financialData;
       const ks = cachedFund.data.defaultKeyStatistics;
+      const balanceSheet = cachedFund.data.balanceSheet;
       if (fd) {
         sales = fd.totalRevenue || null;
         if (fd.totalRevenue && fd.operatingMargins) {
           operatingProfit = fd.totalRevenue * fd.operatingMargins;
         }
         roe = fd.returnOnEquity ? fd.returnOnEquity * 100 : null; // roe in percentage
+        roa = fd.returnOnAssets ? fd.returnOnAssets * 100 : null;
       }
       if (ks) {
         if (!per) per = ks.trailingPE || null;
         if (!forwardPer) forwardPer = ks.forwardPE || null;
         if (!pbr) pbr = ks.priceToBook || null;
-        peg = ks.pegRatio || null;
+        if (!peg) peg = ks.pegRatio || null;
+      }
+      if (Array.isArray(balanceSheet) && balanceSheet.length) {
+        const latestBalanceSheet = balanceSheet[balanceSheet.length - 1];
+        equity = latestBalanceSheet.stockholdersEquity || latestBalanceSheet.commonStockEquity || null;
       }
     }
 
@@ -1143,10 +1158,12 @@ async function enrichUsMarket(contributors, marketId) {
       forwardPer,
       peg,
       roe,
+      roa,
       sales,
       operatingProfit,
       equity,
       pbr,
+      tradingValue,
       currency: "USD",
       detailUrl: `https://finance.yahoo.com/quote/${item.code}`
     };
