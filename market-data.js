@@ -1,3 +1,5 @@
+const YahooFinance = require("yahoo-finance2").default;
+
 const NAVER_STOCK_LIST_API_URL =
   "https://stock.naver.com/api/stockSecurity/individual-stocks/v3/domestic";
 const WIKI_NASDAQ_100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100";
@@ -13,11 +15,15 @@ const CACHE_TTL_MS = 120_000;
 const US_QUOTE_CONCURRENCY = 4;
 const KOR_FUNDAMENTAL_CONCURRENCY = 12;
 const US_SOURCE_TIMEOUT_MS = 6_000;
+const US_FUNDAMENTAL_CACHE_TTL_MS = 1000 * 60 * 30;
+
+const yahooFinance = new YahooFinance({ suppressNotices: ["yahooSurvey"] });
 
 const cache = new Map();
 const screenerCache = new Map();
 const screenerDetailCache = new Map();
 const inflightFetches = new Map();
+const usFundamentalCache = new Map();
 let koreanSearchCache = { cachedAt: 0, items: [] };
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = US_SOURCE_TIMEOUT_MS) {
@@ -265,7 +271,7 @@ async function fetchWiseReportFinancialSummaryHtml(code) {
     cmp_cd: code,
     finGubun: "MAIN",
   });
-  const response = await fetch(`${WISE_REPORT_FINANCIAL_SUMMARY_URL}?${params.toString()}`, {
+  const response = await fetchWithTimeout(`${WISE_REPORT_FINANCIAL_SUMMARY_URL}?${params.toString()}`, {
     headers: {
       "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
       "User-Agent":
@@ -347,7 +353,6 @@ function parseNaverStockListItem(item, rank) {
     roe: parseNumeric(item.roe),
     forwardPer: null,
     peg: null,
-    forwardPeg: null,
     sales: Number.isFinite(parseNumeric(item.sales)) ? parseNumeric(item.sales) / 100000000 : null,
     operatingProfit: Number.isFinite(parseNumeric(item.operatingProfit))
       ? parseNumeric(item.operatingProfit) / 100000000
@@ -408,10 +413,13 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
     if (items.length < count) {
       throw new Error(`Expected ${count} rows, received ${items.length}`);
     }
-    // The list API already includes current prices and core fundamentals.
-    // Per-stock detail pages are reserved for the screener, avoiding hundreds
-    // of extra requests before the first board can be displayed.
-    const enrichedItems = items.map(addKoreanScreenerComputedMetrics);
+    // The list API gives core metrics. Fetch the individual summary pages in
+    // a bounded pool to also supply estimate PER and EPS-growth PEG.
+    const enrichedItems = await mapWithLimit(
+      items,
+      KOR_FUNDAMENTAL_CONCURRENCY,
+      enrichKoreanScreenerItem,
+    );
 
     const config = markets[marketId];
     return {
@@ -432,7 +440,6 @@ const KOREAN_SCREENER_METRICS = new Set([
   "per",
   "forwardPer",
   "peg",
-  "forwardPeg",
   "equity",
   "roe",
   "pbr",
@@ -447,7 +454,6 @@ const KOREAN_SCREENER_DETAIL_METRICS = new Set([
   "equity",
   "forwardPer",
   "peg",
-  "forwardPeg",
   "pbr",
   "roa",
   "reserveRatio",
@@ -522,7 +528,7 @@ async function enrichKoreanScreenerItem(item) {
   }
 
   try {
-    const response = await fetch(`${NAVER_ITEM_MAIN_URL}${item.code}`, {
+    const response = await fetchWithTimeout(`${NAVER_ITEM_MAIN_URL}${item.code}`, {
       headers: {
         "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
         "User-Agent":
@@ -536,9 +542,8 @@ async function enrichKoreanScreenerItem(item) {
 
     const html = new TextDecoder("euc-kr").decode(new Uint8Array(await response.arrayBuffer()));
     let pbr = parseNaverFundamentalRowValue(html, "PBR") ?? parseNaverSiseValue(html, "PBR");
-    let forwardPer = null;
+    let forwardPer = parseNaverSiseValue(html, "추정PER");
     let peg = item.peg;
-    let forwardPeg = item.forwardPeg;
     let sales = parseNaverFundamentalRowValue(html, "매출액");
     let operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
     let equity = parseNaverFundamentalRowValue(html, "자본총계");
@@ -547,6 +552,8 @@ async function enrichKoreanScreenerItem(item) {
     let reserveRatio =
       parseNaverFundamentalRowValue(html, "유보율\\(\\%\\)") ??
       parseNaverSiseValue(html, "유보율");
+    const epsValues = parseNaverFundamentalRowValues(html, "EPS");
+    peg = Number.isFinite(peg) ? peg : calculatePeg(item.per, epsValues);
 
     if (
       !Number.isFinite(sales) ||
@@ -569,17 +576,12 @@ async function enrichKoreanScreenerItem(item) {
         forwardPer = Number.isFinite(forwardPer)
           ? forwardPer
           : parseWiseReportForwardAnnualValue(financialHtml, "PER");
-        const epsValues = parseNaverFundamentalRowValues(financialHtml, "EPS");
+        const financialEpsValues = parseNaverFundamentalRowValues(financialHtml, "EPS");
         peg =
           Number.isFinite(peg)
             ? peg
             : parseNaverFundamentalRowValue(financialHtml, "PEG") ??
-              calculatePeg(item.per, epsValues);
-        forwardPeg =
-          Number.isFinite(forwardPeg)
-            ? forwardPeg
-            : parseNaverFundamentalRowValue(financialHtml, "Forward PEG") ??
-              calculatePeg(forwardPer, epsValues);
+              calculatePeg(item.per, financialEpsValues);
         roa = Number.isFinite(roa) ? roa : parseNaverFundamentalRowValue(financialHtml, "ROA");
         eps = Number.isFinite(eps) ? eps : parseNaverFundamentalRowValue(financialHtml, "EPS");
         reserveRatio = Number.isFinite(reserveRatio)
@@ -592,7 +594,6 @@ async function enrichKoreanScreenerItem(item) {
       pbr: Number.isFinite(pbr) ? pbr : item.pbr,
       forwardPer: Number.isFinite(forwardPer) ? forwardPer : item.forwardPer,
       peg: Number.isFinite(peg) ? peg : item.peg,
-      forwardPeg: Number.isFinite(forwardPeg) ? forwardPeg : item.forwardPeg,
       sales: Number.isFinite(sales) ? sales : item.sales,
       operatingProfit: Number.isFinite(operatingProfit) ? operatingProfit : item.operatingProfit,
       equity: Number.isFinite(equity) ? equity : item.equity,
@@ -1034,44 +1035,96 @@ async function mapWithLimit(items, limit, mapper) {
   return results;
 }
 
+function finiteOrNull(value) {
+  return Number.isFinite(value) ? value : null;
+}
+
+async function fetchUsFundamentals(symbol) {
+  const cached = usFundamentalCache.get(symbol);
+  if (cached && Date.now() - cached.cachedAt < US_FUNDAMENTAL_CACHE_TTL_MS) {
+    return cached.metrics;
+  }
+
+  const summary = await yahooFinance.quoteSummary(symbol, {
+    modules: ["price", "summaryDetail", "defaultKeyStatistics", "financialData"],
+  });
+  const price = summary.price || {};
+  const detail = summary.summaryDetail || {};
+  const statistics = summary.defaultKeyStatistics || {};
+  const financial = summary.financialData || {};
+  const currentPrice = finiteOrNull(price.regularMarketPrice) ?? finiteOrNull(financial.currentPrice);
+  const previousClose = finiteOrNull(price.regularMarketPreviousClose) ?? finiteOrNull(detail.regularMarketPreviousClose);
+  const change =
+    finiteOrNull(price.regularMarketChange) ??
+    (Number.isFinite(currentPrice) && Number.isFinite(previousClose) ? currentPrice - previousClose : null);
+  const changeRate =
+    finiteOrNull(price.regularMarketChangePercent) != null
+      ? price.regularMarketChangePercent * 100
+      : Number.isFinite(change) && Number.isFinite(previousClose) && previousClose !== 0
+        ? (change / previousClose) * 100
+        : null;
+  const revenue = finiteOrNull(financial.totalRevenue);
+  const operatingMargin = finiteOrNull(financial.operatingMargins);
+  const shares = finiteOrNull(statistics.sharesOutstanding) ?? finiteOrNull(statistics.impliedSharesOutstanding);
+  const bookValue = finiteOrNull(statistics.bookValue);
+
+  const metrics = {
+    price: currentPrice,
+    change,
+    changeRate,
+    volume: finiteOrNull(price.regularMarketVolume) ?? finiteOrNull(detail.regularMarketVolume),
+    marketCap: finiteOrNull(price.marketCap) ?? finiteOrNull(detail.marketCap),
+    per: finiteOrNull(detail.trailingPE),
+    forwardPer: finiteOrNull(detail.forwardPE) ?? finiteOrNull(statistics.forwardPE),
+    peg: finiteOrNull(statistics.pegRatio),
+    roe: Number.isFinite(financial.returnOnEquity) ? financial.returnOnEquity * 100 : null,
+    roa: Number.isFinite(financial.returnOnAssets) ? financial.returnOnAssets * 100 : null,
+    sales: revenue,
+    operatingProfit:
+      Number.isFinite(revenue) && Number.isFinite(operatingMargin) ? revenue * operatingMargin : null,
+    equity: Number.isFinite(bookValue) && Number.isFinite(shares) ? bookValue * shares : null,
+    pbr: finiteOrNull(statistics.priceToBook),
+    eps: finiteOrNull(statistics.trailingEps),
+  };
+  usFundamentalCache.set(symbol, { cachedAt: Date.now(), metrics });
+  return metrics;
+}
+
 async function enrichUsMarket(contributors, marketId) {
-  // Do not block the initial board on 100+ Yahoo fundamental requests. The
-  // ranking source already provides current price and return data; unavailable
-  // fundamentals are shown as '-' instead of making the entire US board fail.
-  return contributors.map((item) => {
-    const price = Number.isFinite(item.price) ? item.price : null;
-    const volume = Number.isFinite(item.volume) ? item.volume : null;
-    const changeRate = Number.isFinite(item.changeRate) ? item.changeRate : null;
-    const change = Number.isFinite(item.change) ? item.change : null;
-    const per = Number.isFinite(item.per) ? item.per : null;
-    const forwardPer = Number.isFinite(item.forwardPer) ? item.forwardPer : null;
-    const peg = Number.isFinite(item.peg) ? item.peg : null;
-    const forwardPeg = Number.isFinite(item.forwardPeg) ? item.forwardPeg : null;
+  return mapWithLimit(contributors, US_QUOTE_CONCURRENCY, async (item) => {
+    let fundamentals = {};
+    try {
+      fundamentals = await fetchUsFundamentals(item.code);
+    } catch (error) {
+      // Ranking data remains useful if Yahoo temporarily rate-limits one symbol.
+      console.warn(`US fundamentals unavailable for ${item.code}: ${error.message}`);
+    }
+
+    const price = finiteOrNull(fundamentals.price) ?? finiteOrNull(item.price);
+    const volume = finiteOrNull(fundamentals.volume) ?? finiteOrNull(item.volume);
+    const changeRate = finiteOrNull(fundamentals.changeRate) ?? finiteOrNull(item.changeRate);
+    const change = finiteOrNull(fundamentals.change) ?? finiteOrNull(item.change);
+    const marketCap = finiteOrNull(fundamentals.marketCap) ?? finiteOrNull(item.marketCap);
     return {
       ...item,
+      ...fundamentals,
       market: marketId,
+      marketCap,
+      marketCapText: formatUsdMarketCap(marketCap) || item.marketCapText,
       price,
-      priceText: Number.isFinite(price) ? formatUsd(price) : "",
+      priceText: Number.isFinite(price) ? formatUsd(price) : item.priceText || "",
       change,
       changeText: Number.isFinite(change) ? signedText(change, formatUsd) : "",
       changeDirection: change > 0 ? "상승" : change < 0 ? "하락" : "보합",
       changeRate,
-      changeRateText: Number.isFinite(changeRate) ? signedText(changeRate, (v) => `${formatUsd(v)}%`) : "",
+      changeRateText: Number.isFinite(changeRate)
+        ? signedText(changeRate, (value) => `${formatUsd(value)}%`)
+        : "",
       volume,
       volumeText: Number.isFinite(volume) ? volume.toLocaleString("en-US") : "",
-      per,
-      forwardPer,
-      peg,
-      forwardPeg,
-      roe: Number.isFinite(item.roe) ? item.roe : null,
-      roa: Number.isFinite(item.roa) ? item.roa : null,
-      sales: Number.isFinite(item.sales) ? item.sales : null,
-      operatingProfit: Number.isFinite(item.operatingProfit) ? item.operatingProfit : null,
-      equity: Number.isFinite(item.equity) ? item.equity : null,
-      pbr: Number.isFinite(item.pbr) ? item.pbr : null,
       tradingValue: Number.isFinite(price) && Number.isFinite(volume) ? price * volume : null,
       currency: "USD",
-      detailUrl: `https://finance.yahoo.com/quote/${item.code}`
+      detailUrl: `https://finance.yahoo.com/quote/${item.code}`,
     };
   });
 }

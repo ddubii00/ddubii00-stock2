@@ -478,7 +478,6 @@ function currentSortOptions() {
     { label: "PER", value: "per" },
     { label: "Forward PER", value: "forwardPer" },
     { label: "PEG", value: "peg" },
-    { label: "Forward PEG", value: "forwardPeg" },
     { label: "ROE", value: "roe" },
     { label: "PBR", value: "pbr" },
     { label: "거래액", value: "tradingValue" },
@@ -722,7 +721,6 @@ function renderRows(items) {
           <td class="numeric">${formatPlainNumber(stock.per)}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.forwardPer, 2)}</td>
           <td class="numeric muted-value">${formatOptionalNumber(stock.peg, 2)}</td>
-          <td class="numeric muted-value">${formatOptionalNumber(stock.forwardPeg, 2)}</td>
           <td class="numeric">${Number.isFinite(stock.roe) ? `${formatPlainNumber(stock.roe)}%` : "-"}</td>
           <td class="numeric muted-value">${formatUnavailableMetric(stock.pbr)}</td>
           <td class="numeric">${formatNumber(stock.volume)}</td>
