@@ -2,7 +2,9 @@ const YahooFinance = require("yahoo-finance2").default;
 
 const NAVER_STOCK_LIST_API_URL =
   "https://stock.naver.com/api/stockSecurity/individual-stocks/v3/domestic";
-const WIKI_NASDAQ_100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100";
+// The index overview page no longer contains the constituent table. Keep the
+// dedicated list as a resilient fallback when the primary ranking is blocked.
+const WIKI_NASDAQ_100_URL = "https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies";
 const WIKI_DOW_URL = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average";
 const MARKETCAP_NASDAQ_100_URL =
   "https://marketcap.company/stock-indices/nasdaq-100-index-market-cap/";
