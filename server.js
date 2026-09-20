@@ -652,7 +652,13 @@ async function handleApi(req, res, url) {
       periodReturnCache.delete(`period:${marketId}`);
     }
     const payload = await getMarketPayload(marketId, forceRefresh);
-    const enrichedPayload = await enrichPeriodReturns(payload, marketId);
+    // Calculating seven return windows for every US constituent triggers hundreds
+    // of historical quote requests and can stall the whole NASDAQ/Dow board.
+    // Keep the board fast; the selected-stock popup still loads full history.
+    const enrichedPayload =
+      marketId === "nasdaq100" || marketId === "dow"
+        ? payload
+        : await enrichPeriodReturns(payload, marketId);
     sendJson(res, 200, enrichedPayload);
   } catch (error) {
     sendJson(res, 502, {

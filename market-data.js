@@ -1,6 +1,3 @@
-const YahooFinance = require('yahoo-finance2').default;
-const yahooFinance = new YahooFinance({ suppressNotices: ['yahooSurvey'] });
-
 const NAVER_STOCK_LIST_API_URL =
   "https://stock.naver.com/api/stockSecurity/individual-stocks/v3/domestic";
 const WIKI_NASDAQ_100_URL = "https://en.wikipedia.org/wiki/Nasdaq-100";
@@ -12,15 +9,31 @@ const MARKETCAP_DOW_URL =
 const STOOQ_QUOTE_URL = "https://stooq.com/q/l/";
 const NAVER_ITEM_MAIN_URL = "https://finance.naver.com/item/main.naver?code=";
 const WISE_REPORT_FINANCIAL_SUMMARY_URL = "https://comp.wisereport.co.kr/company/cF1001.aspx";
-const CACHE_TTL_MS = 45_000;
+const CACHE_TTL_MS = 120_000;
 const US_QUOTE_CONCURRENCY = 4;
-const KOR_FUNDAMENTAL_CONCURRENCY = 8;
+const KOR_FUNDAMENTAL_CONCURRENCY = 12;
+const US_SOURCE_TIMEOUT_MS = 6_000;
 
 const cache = new Map();
 const screenerCache = new Map();
 const screenerDetailCache = new Map();
 const inflightFetches = new Map();
 let koreanSearchCache = { cachedAt: 0, items: [] };
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = US_SOURCE_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error(`${url} timed out`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 const markets = {
   kospi: {
@@ -334,6 +347,7 @@ function parseNaverStockListItem(item, rank) {
     roe: parseNumeric(item.roe),
     forwardPer: null,
     peg: null,
+    forwardPeg: null,
     sales: Number.isFinite(parseNumeric(item.sales)) ? parseNumeric(item.sales) / 100000000 : null,
     operatingProfit: Number.isFinite(parseNumeric(item.operatingProfit))
       ? parseNumeric(item.operatingProfit) / 100000000
@@ -356,7 +370,7 @@ async function fetchMarketCapPage(sosok, page) {
     index: String(Math.max(0, page - 1)),
     size: "50",
   });
-  const response = await fetch(`${NAVER_STOCK_LIST_API_URL}?${params.toString()}`, {
+  const response = await fetchWithTimeout(`${NAVER_STOCK_LIST_API_URL}?${params.toString()}`, {
     headers: {
       "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
       "User-Agent":
@@ -394,77 +408,10 @@ async function getKoreanMarket(marketId, sosok, count, forceRefresh = false) {
     if (items.length < count) {
       throw new Error(`Expected ${count} rows, received ${items.length}`);
     }
-    const enrichedItems = await mapWithLimit(
-      items,
-      KOR_FUNDAMENTAL_CONCURRENCY,
-      async (item) => {
-        try {
-          const response = await fetch(`${NAVER_ITEM_MAIN_URL}${item.code}`, {
-            headers: {
-              "Accept-Language": "ko-KR,ko;q=0.9,en;q=0.8",
-              "User-Agent":
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
-            },
-          });
-
-          if (!response.ok) {
-            return item;
-          }
-
-          const html = new TextDecoder("euc-kr").decode(new Uint8Array(await response.arrayBuffer()));
-          const tradingValue =
-            item.tradingValue ??
-            (Number.isFinite(item.price) && Number.isFinite(item.volume)
-              ? (item.price * item.volume) / 100000000
-              : null);
-          const pbr = parseNaverFundamentalRowValue(html, "PBR") ?? parseNaverSiseValue(html, "PBR");
-          let sales = parseNaverFundamentalRowValue(html, "매출액");
-          let operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
-          let equity = parseNaverFundamentalRowValue(html, "자본총계");
-          let roa = parseNaverFundamentalRowValue(html, "ROA\\(\\%\\)");
-          let eps = parseNaverFundamentalRowValue(html, "EPS\\(원\\)");
-          let reserveRatio =
-            parseNaverFundamentalRowValue(html, "유보율\\(\\%\\)") ??
-            parseNaverSiseValue(html, "유보율");
-          let forwardPer = null;
-          let peg = null;
-          const financialHtml = await fetchWiseReportFinancialSummaryHtml(item.code);
-          if (financialHtml) {
-            sales = Number.isFinite(sales) ? sales : parseNaverFundamentalRowValue(financialHtml, "매출액");
-            operatingProfit = Number.isFinite(operatingProfit)
-              ? operatingProfit
-              : parseNaverFundamentalRowValue(financialHtml, "영업이익");
-            equity = Number.isFinite(equity) ? equity : parseNaverFundamentalRowValue(financialHtml, "자본총계");
-            forwardPer = parseWiseReportForwardAnnualValue(financialHtml, "PER");
-            peg =
-              parseNaverFundamentalRowValue(financialHtml, "PEG") ??
-              calculatePeg(forwardPer ?? item.per, parseNaverFundamentalRowValues(financialHtml, "EPS"));
-            roa = Number.isFinite(roa) ? roa : parseNaverFundamentalRowValue(financialHtml, "ROA");
-            eps = Number.isFinite(eps) ? eps : parseNaverFundamentalRowValue(financialHtml, "EPS");
-            reserveRatio = Number.isFinite(reserveRatio)
-              ? reserveRatio
-              : parseNaverFundamentalRowValue(financialHtml, "자본유보율");
-          }
-          return {
-            ...item,
-            tradingValue,
-            pbr: Number.isFinite(pbr) ? pbr : item.pbr,
-            sales: Number.isFinite(sales) ? sales : item.sales,
-            operatingProfit: Number.isFinite(operatingProfit)
-              ? operatingProfit
-              : item.operatingProfit,
-            equity: Number.isFinite(equity) ? equity : item.equity,
-            forwardPer: Number.isFinite(forwardPer) ? forwardPer : item.forwardPer,
-            peg: Number.isFinite(peg) ? peg : item.peg,
-            roa: Number.isFinite(roa) ? roa : item.roa,
-            reserveRatio: Number.isFinite(reserveRatio) ? reserveRatio : item.reserveRatio,
-            eps: Number.isFinite(eps) ? eps : item.eps,
-          };
-        } catch {
-          return item;
-        }
-      },
-    );
+    // The list API already includes current prices and core fundamentals.
+    // Per-stock detail pages are reserved for the screener, avoiding hundreds
+    // of extra requests before the first board can be displayed.
+    const enrichedItems = items.map(addKoreanScreenerComputedMetrics);
 
     const config = markets[marketId];
     return {
@@ -485,6 +432,7 @@ const KOREAN_SCREENER_METRICS = new Set([
   "per",
   "forwardPer",
   "peg",
+  "forwardPeg",
   "equity",
   "roe",
   "pbr",
@@ -499,6 +447,7 @@ const KOREAN_SCREENER_DETAIL_METRICS = new Set([
   "equity",
   "forwardPer",
   "peg",
+  "forwardPeg",
   "pbr",
   "roa",
   "reserveRatio",
@@ -589,6 +538,7 @@ async function enrichKoreanScreenerItem(item) {
     let pbr = parseNaverFundamentalRowValue(html, "PBR") ?? parseNaverSiseValue(html, "PBR");
     let forwardPer = null;
     let peg = item.peg;
+    let forwardPeg = item.forwardPeg;
     let sales = parseNaverFundamentalRowValue(html, "매출액");
     let operatingProfit = parseNaverFundamentalRowValue(html, "영업이익");
     let equity = parseNaverFundamentalRowValue(html, "자본총계");
@@ -619,11 +569,17 @@ async function enrichKoreanScreenerItem(item) {
         forwardPer = Number.isFinite(forwardPer)
           ? forwardPer
           : parseWiseReportForwardAnnualValue(financialHtml, "PER");
+        const epsValues = parseNaverFundamentalRowValues(financialHtml, "EPS");
         peg =
           Number.isFinite(peg)
             ? peg
             : parseNaverFundamentalRowValue(financialHtml, "PEG") ??
-              calculatePeg(forwardPer ?? item.per, parseNaverFundamentalRowValues(financialHtml, "EPS"));
+              calculatePeg(item.per, epsValues);
+        forwardPeg =
+          Number.isFinite(forwardPeg)
+            ? forwardPeg
+            : parseNaverFundamentalRowValue(financialHtml, "Forward PEG") ??
+              calculatePeg(forwardPer, epsValues);
         roa = Number.isFinite(roa) ? roa : parseNaverFundamentalRowValue(financialHtml, "ROA");
         eps = Number.isFinite(eps) ? eps : parseNaverFundamentalRowValue(financialHtml, "EPS");
         reserveRatio = Number.isFinite(reserveRatio)
@@ -636,6 +592,7 @@ async function enrichKoreanScreenerItem(item) {
       pbr: Number.isFinite(pbr) ? pbr : item.pbr,
       forwardPer: Number.isFinite(forwardPer) ? forwardPer : item.forwardPer,
       peg: Number.isFinite(peg) ? peg : item.peg,
+      forwardPeg: Number.isFinite(forwardPeg) ? forwardPeg : item.forwardPeg,
       sales: Number.isFinite(sales) ? sales : item.sales,
       operatingProfit: Number.isFinite(operatingProfit) ? operatingProfit : item.operatingProfit,
       equity: Number.isFinite(equity) ? equity : item.equity,
@@ -777,7 +734,7 @@ async function getKoreanScreenerPayload(
 }
 
 async function fetchHtml(url) {
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: {
       "Accept-Language": "en-US,en;q=0.9",
       "User-Agent":
@@ -868,40 +825,53 @@ function parseMarketCapCompanyRows(html, limit) {
 async function fetchUsMarketCapRanking(marketId) {
   const url = marketId === "nasdaq100" ? MARKETCAP_NASDAQ_100_URL : MARKETCAP_DOW_URL;
   const limit = marketId === "nasdaq100" ? 100 : 30;
-  const pageCount = Math.ceil(limit / 50);
-  const pages = await Promise.all(
-    Array.from({ length: pageCount }, async (_, index) => {
-      if (index === 0) {
-        return fetchHtml(url);
-      }
-      const pageUrl = `${url}?page=${index + 1}`;
-      return fetchHtml(pageUrl);
-    }),
-  );
-  const rows = pages
-    .flatMap((html) => parseMarketCapCompanyRows(html, 1000))
-    .filter(
-      (item, index, all) => all.findIndex((candidate) => candidate.code === item.code) === index,
-    )
-    .sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0))
-    .slice(0, limit)
-    .map((item, index) => ({
-      ...item,
-      rank: index + 1,
-    }));
+  try {
+    const pageCount = Math.ceil(limit / 50);
+    const pages = await Promise.all(
+      Array.from({ length: pageCount }, async (_, index) => {
+        if (index === 0) return fetchHtml(url);
+        return fetchHtml(`${url}?page=${index + 1}`);
+      }),
+    );
+    const rows = pages
+      .flatMap((html) => parseMarketCapCompanyRows(html, 1000))
+      .filter(
+        (item, index, all) => all.findIndex((candidate) => candidate.code === item.code) === index,
+      )
+      .sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0))
+      .slice(0, limit)
+      .map((item, index) => ({ ...item, rank: index + 1 }));
 
-  if (rows.length < limit) {
-    throw new Error(`Expected ${limit} ${marketId} market-cap rows, received ${rows.length}`);
+    if (rows.length >= limit) return rows;
+  } catch (error) {
+    console.warn(`US market-cap ranking unavailable for ${marketId}: ${error.message}`);
   }
 
-  return rows;
+  // MarketCap.Company can rate-limit or change its markup. The constituent lists
+  // keep the NASDAQ and Dow boards usable until the primary ranking returns.
+  const fallback = marketId === "nasdaq100"
+    ? await fetchNasdaq100Constituents()
+    : await fetchDowConstituents();
+  if (fallback.length < limit) {
+    throw new Error(`Unable to load ${marketId} constituents`);
+  }
+  return fallback.slice(0, limit).map((item, index) => ({
+    ...item,
+    rank: index + 1,
+    marketCap: null,
+    marketCapText: "-",
+    price: null,
+    change: null,
+    changeRate: null,
+    currency: "USD",
+  }));
 }
 
 async function fetchNasdaq100Constituents() {
   const html = await fetchHtml(WIKI_NASDAQ_100_URL);
   const table = findWikiTable(
     html,
-    (text) => text.includes("Ticker Company") && text.includes("ICB Industry"),
+    (text) => text.includes("Ticker") && text.includes("Company"),
   );
 
   return parseHtmlRows(table)
@@ -919,17 +889,22 @@ async function fetchDowConstituents() {
   const html = await fetchHtml(WIKI_DOW_URL);
   const table = findWikiTable(
     html,
-    (text) => text.includes("DJIA component companies") && text.includes("Symbol"),
+    (text) => text.includes("Company") && text.includes("Symbol"),
   );
 
   return parseHtmlRows(table)
-    .filter((cells) => /^[A-Z][A-Z0-9.-]*$/.test(cells[2]) && cells[2] !== "Symbol")
-    .map((cells, index) => ({
-      rank: index + 1,
-      code: cells[2],
-      name: cells[0],
-      sector: cells[3] || "",
-    }));
+    .map((cells) => {
+      const symbolIndex = cells.findIndex(
+        (cell) => /^[A-Z][A-Z0-9.-]*$/.test(cell) && cell !== "Symbol",
+      );
+      return {
+        code: symbolIndex >= 0 ? cells[symbolIndex] : "",
+        name: cells[0] || "",
+        sector: cells[symbolIndex + 1] || "",
+      };
+    })
+    .filter((item) => item.code && item.name)
+    .map((item, index) => ({ ...item, rank: index + 1 }));
 }
 
 function stooqSymbol(symbol) {
@@ -1059,89 +1034,19 @@ async function mapWithLimit(items, limit, mapper) {
   return results;
 }
 
-const fundamentalCache = new Map();
-const FUNDAMENTAL_CACHE_TTL = 1000 * 60 * 60 * 24; // 24 hours
-
 async function enrichUsMarket(contributors, marketId) {
-  const codes = contributors.map(item => item.code);
-  const quotes = await yahooFinance.quote(codes);
-  const quoteMap = Object.fromEntries(quotes.map(q => [q.symbol, q]));
-
-  // Fetch fundamentals in chunks of 20 with 200ms delay to improve loading speed
-  const chunkSize = 20;
-  for (let i = 0; i < codes.length; i += chunkSize) {
-    const chunk = codes.slice(i, i + chunkSize);
-    const uncached = chunk.filter(code => {
-      const cached = fundamentalCache.get(code);
-      return !cached || Date.now() - cached.timestamp > FUNDAMENTAL_CACHE_TTL;
-    });
-
-    if (uncached.length > 0) {
-      await Promise.all(uncached.map(async (code) => {
-        try {
-          const [qs, balanceSheet] = await Promise.all([
-            yahooFinance.quoteSummary(code, { modules: ['financialData', 'defaultKeyStatistics'] }),
-            yahooFinance.fundamentalsTimeSeries(code, {
-              period1: '2024-01-01',
-              type: 'annual',
-              module: 'balance-sheet',
-            }),
-          ]);
-          fundamentalCache.set(code, {
-            timestamp: Date.now(),
-            data: { ...qs, balanceSheet },
-          });
-        } catch (error) {
-          console.error(`Failed to fetch fundamental for ${code}:`, error.message);
-        }
-      }));
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-  }
-
+  // Do not block the initial board on 100+ Yahoo fundamental requests. The
+  // ranking source already provides current price and return data; unavailable
+  // fundamentals are shown as '-' instead of making the entire US board fail.
   return contributors.map((item) => {
-    const quote = quoteMap[item.code] || {};
-    const price = quote.regularMarketPrice || null;
-    const change = quote.regularMarketChange || null;
-    const changeRate = quote.regularMarketChangePercent || null;
-    const volume = quote.regularMarketVolume || null;
-    
-    let sales = null;
-    let operatingProfit = null;
-    let equity = null;
-    let per = quote.trailingPE || null;
-    let forwardPer = quote.forwardPE || null;
-    let roe = null;
-    let pbr = quote.priceToBook || null;
-    let peg = quote.pegRatio || null;
-    let roa = null;
-    let tradingValue = Number.isFinite(price) && Number.isFinite(volume) ? price * volume : null;
-
-    const cachedFund = fundamentalCache.get(item.code);
-    if (cachedFund && cachedFund.data) {
-      const fd = cachedFund.data.financialData;
-      const ks = cachedFund.data.defaultKeyStatistics;
-      const balanceSheet = cachedFund.data.balanceSheet;
-      if (fd) {
-        sales = fd.totalRevenue || null;
-        if (fd.totalRevenue && fd.operatingMargins) {
-          operatingProfit = fd.totalRevenue * fd.operatingMargins;
-        }
-        roe = fd.returnOnEquity ? fd.returnOnEquity * 100 : null; // roe in percentage
-        roa = fd.returnOnAssets ? fd.returnOnAssets * 100 : null;
-      }
-      if (ks) {
-        if (!per) per = ks.trailingPE || null;
-        if (!forwardPer) forwardPer = ks.forwardPE || null;
-        if (!pbr) pbr = ks.priceToBook || null;
-        if (!peg) peg = ks.pegRatio || null;
-      }
-      if (Array.isArray(balanceSheet) && balanceSheet.length) {
-        const latestBalanceSheet = balanceSheet[balanceSheet.length - 1];
-        equity = latestBalanceSheet.stockholdersEquity || latestBalanceSheet.commonStockEquity || null;
-      }
-    }
-
+    const price = Number.isFinite(item.price) ? item.price : null;
+    const volume = Number.isFinite(item.volume) ? item.volume : null;
+    const changeRate = Number.isFinite(item.changeRate) ? item.changeRate : null;
+    const change = Number.isFinite(item.change) ? item.change : null;
+    const per = Number.isFinite(item.per) ? item.per : null;
+    const forwardPer = Number.isFinite(item.forwardPer) ? item.forwardPer : null;
+    const peg = Number.isFinite(item.peg) ? item.peg : null;
+    const forwardPeg = Number.isFinite(item.forwardPeg) ? item.forwardPeg : null;
     return {
       ...item,
       market: marketId,
@@ -1157,13 +1062,14 @@ async function enrichUsMarket(contributors, marketId) {
       per,
       forwardPer,
       peg,
-      roe,
-      roa,
-      sales,
-      operatingProfit,
-      equity,
-      pbr,
-      tradingValue,
+      forwardPeg,
+      roe: Number.isFinite(item.roe) ? item.roe : null,
+      roa: Number.isFinite(item.roa) ? item.roa : null,
+      sales: Number.isFinite(item.sales) ? item.sales : null,
+      operatingProfit: Number.isFinite(item.operatingProfit) ? item.operatingProfit : null,
+      equity: Number.isFinite(item.equity) ? item.equity : null,
+      pbr: Number.isFinite(item.pbr) ? item.pbr : null,
+      tradingValue: Number.isFinite(price) && Number.isFinite(volume) ? price * volume : null,
       currency: "USD",
       detailUrl: `https://finance.yahoo.com/quote/${item.code}`
     };
