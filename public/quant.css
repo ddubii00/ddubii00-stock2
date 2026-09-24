@@ -1,0 +1,183 @@
+.quant-tab-button {
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 8px 14px;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.quant-tab-button:hover,
+.quant-tab-button.is-active {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.quant-hidden {
+  display: none !important;
+}
+
+.quant-panel {
+  display: none;
+  margin: 0 0 16px;
+}
+
+.quant-panel.is-visible {
+  display: block;
+}
+
+.quant-preset-card {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.quant-preset-card > div:first-child {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.quant-preset-card strong {
+  color: #0f172a;
+  font-size: 16px;
+}
+
+.quant-preset-card span,
+.quant-rule-line {
+  color: #475569;
+  font-size: 12px;
+}
+
+.quant-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.quant-controls label {
+  display: grid;
+  gap: 4px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.quant-controls select,
+.quant-controls button {
+  min-height: 34px;
+  border: 1px solid #cbd5e1;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #0f172a;
+  font: inherit;
+  padding: 6px 10px;
+}
+
+.quant-controls button {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.quant-controls #quantApplyButton {
+  border-color: #0f766e;
+  background: #0f766e;
+  color: #ffffff;
+}
+
+.quant-controls button:disabled {
+  cursor: wait;
+  opacity: .55;
+}
+
+.quant-status {
+  margin: 8px 0;
+  color: #475569;
+  font-size: 12px;
+}
+
+.quant-table-wrap {
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.quant-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+}
+
+.quant-table th,
+.quant-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #eef2f7;
+  white-space: nowrap;
+}
+
+.quant-table th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  text-align: left;
+}
+
+.quant-table .numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.quant-table .rank {
+  text-align: center;
+  font-weight: 800;
+}
+
+.quant-score-main {
+  color: #0f766e;
+  font-weight: 800;
+}
+
+.quant-stock-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #0f172a;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.quant-stock-link:hover {
+  color: #0f766e;
+  text-decoration: underline;
+}
+
+.quant-table .code {
+  margin-left: 5px;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+@media (max-width: 767px) {
+  .quant-tab-button {
+    padding: 7px 10px;
+  }
+
+  .quant-preset-card {
+    padding: 12px;
+  }
+}
